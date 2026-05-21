@@ -537,6 +537,33 @@
           "details": "Handy는 빠르고 로컬 음성-텍스트 처리를 위해 Whisper.cpp를 사용합니다. Georgi Gerganov와 기여자들의 놀라운 작업에 감사드립니다."
         }
       }
+    },
+    "transcription": {
+      "title": "Transcription",
+      "provider": {
+        "title": "Provider",
+        "description": "Choose whether speech is transcribed locally or with OpenAI.",
+        "options": {
+          "local": "Local Models",
+          "openai": "OpenAI"
+        }
+      },
+      "openai": {
+        "endpoint": {
+          "title": "Endpoint",
+          "description": "OpenAI API base URL for transcription requests.",
+          "placeholder": "https://api.openai.com/v1"
+        },
+        "apiKey": {
+          "title": "API Key",
+          "description": "OpenAI API key used only for transcription requests.",
+          "placeholder": "sk-..."
+        },
+        "model": {
+          "title": "Model",
+          "description": "Choose the OpenAI speech-to-text model."
+        }
+      }
     }
   },
   "footer": {

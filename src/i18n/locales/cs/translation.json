@@ -537,6 +537,33 @@
           "details": "Handy používá Whisper.cpp pro rychlé lokální zpracování řeči na text. Díky skvělé práci Georgiho Gerganova a přispěvatelů."
         }
       }
+    },
+    "transcription": {
+      "title": "Transcription",
+      "provider": {
+        "title": "Provider",
+        "description": "Choose whether speech is transcribed locally or with OpenAI.",
+        "options": {
+          "local": "Local Models",
+          "openai": "OpenAI"
+        }
+      },
+      "openai": {
+        "endpoint": {
+          "title": "Endpoint",
+          "description": "OpenAI API base URL for transcription requests.",
+          "placeholder": "https://api.openai.com/v1"
+        },
+        "apiKey": {
+          "title": "API Key",
+          "description": "OpenAI API key used only for transcription requests.",
+          "placeholder": "sk-..."
+        },
+        "model": {
+          "title": "Model",
+          "description": "Choose the OpenAI speech-to-text model."
+        }
+      }
     }
   },
   "footer": {

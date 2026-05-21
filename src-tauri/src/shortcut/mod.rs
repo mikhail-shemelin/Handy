@@ -19,12 +19,13 @@ use specta::Type;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::openai_transcription;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::settings::APPLE_INTELLIGENCE_DEFAULT_MODEL_ID;
 use crate::settings::{
     self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation, LLMPrompt,
-    OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
-    APPLE_INTELLIGENCE_PROVIDER_ID,
+    OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TranscriptionProvider, TypingTool,
+    APPLE_INTELLIGENCE_PROVIDER_ID, OPENAI_TRANSCRIPTION_PROVIDER_ID,
 };
 use crate::tray;
 
@@ -820,6 +821,65 @@ pub fn change_post_process_enabled_setting(app: AppHandle, enabled: bool) -> Res
 pub fn change_experimental_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.experimental_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_transcription_provider_setting(
+    app: AppHandle,
+    provider: TranscriptionProvider,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.transcription_provider = provider;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_openai_transcription_base_url_setting(
+    app: AppHandle,
+    base_url: String,
+) -> Result<(), String> {
+    let base_url =
+        openai_transcription::normalize_base_url(&base_url).map_err(|error| error.to_string())?;
+
+    let mut settings = settings::get_settings(&app);
+    settings.openai_transcription_base_url = base_url;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_openai_transcription_api_key_setting(
+    app: AppHandle,
+    api_key: String,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.openai_transcription_api_keys.insert(
+        OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+        api_key.trim().to_string(),
+    );
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_openai_transcription_model_setting(
+    app: AppHandle,
+    model: String,
+) -> Result<(), String> {
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("OpenAI transcription model cannot be empty".to_string());
+    }
+
+    let mut settings = settings::get_settings(&app);
+    settings.openai_transcription_model = model;
     settings::write_settings(&app, settings);
     Ok(())
 }

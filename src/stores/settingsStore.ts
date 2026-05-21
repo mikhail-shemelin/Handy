@@ -6,6 +6,8 @@ import type {
   AudioDevice,
   WhisperAcceleratorSetting,
   OrtAcceleratorSetting,
+  TranscriptionProvider,
+  Result,
 } from "@/bindings";
 import { commands } from "@/bindings";
 
@@ -73,6 +75,16 @@ const DEFAULT_AUDIO_DEVICE: AudioDevice = {
   is_default: true,
 };
 
+const unwrapCommandResult = async <T, E>(
+  promise: Promise<Result<T, E>>,
+): Promise<T> => {
+  const result = await promise;
+  if (result.status === "error") {
+    throw new Error(String(result.error));
+  }
+  return result.data;
+};
+
 const settingUpdaters: {
   [K in keyof Settings]?: (value: Settings[K]) => Promise<unknown>;
 } = {
@@ -88,6 +100,20 @@ const settingUpdaters: {
     commands.changeAutostartSetting(value as boolean),
   update_checks_enabled: (value) =>
     commands.changeUpdateChecksSetting(value as boolean),
+  transcription_provider: (value) =>
+    unwrapCommandResult(
+      commands.changeTranscriptionProviderSetting(
+        value as TranscriptionProvider,
+      ),
+    ),
+  openai_transcription_base_url: (value) =>
+    unwrapCommandResult(
+      commands.changeOpenaiTranscriptionBaseUrlSetting(value as string),
+    ),
+  openai_transcription_model: (value) =>
+    unwrapCommandResult(
+      commands.changeOpenaiTranscriptionModelSetting(value as string),
+    ),
   push_to_talk: (value) => commands.changePttSetting(value as boolean),
   selected_microphone: (value) =>
     commands.setSelectedMicrophone(

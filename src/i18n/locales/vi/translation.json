@@ -537,6 +537,33 @@
           "details": "Handy sử dụng Whisper.cpp để xử lý chuyển đổi giọng nói thành văn bản nhanh, cục bộ. Cảm ơn công việc tuyệt vời của Georgi Gerganov và các cộng tác viên."
         }
       }
+    },
+    "transcription": {
+      "title": "Transcription",
+      "provider": {
+        "title": "Provider",
+        "description": "Choose whether speech is transcribed locally or with OpenAI.",
+        "options": {
+          "local": "Local Models",
+          "openai": "OpenAI"
+        }
+      },
+      "openai": {
+        "endpoint": {
+          "title": "Endpoint",
+          "description": "OpenAI API base URL for transcription requests.",
+          "placeholder": "https://api.openai.com/v1"
+        },
+        "apiKey": {
+          "title": "API Key",
+          "description": "OpenAI API key used only for transcription requests.",
+          "placeholder": "sk-..."
+        },
+        "model": {
+          "title": "Model",
+          "description": "Choose the OpenAI speech-to-text model."
+        }
+      }
     }
   },
   "footer": {

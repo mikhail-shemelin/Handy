@@ -1,6 +1,7 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{EngineType, ModelManager};
+use crate::openai_transcription::{self, OpenAiTranscriptionConfig};
 use crate::settings::{
     get_settings, ModelUnloadTimeout, OrtAcceleratorSetting, WhisperAcceleratorSetting,
 };
@@ -414,6 +415,11 @@ impl TranscriptionManager {
 
     /// Kicks off the model loading in a background thread if it's not already loaded
     pub fn initiate_model_load(&self) {
+        let settings = get_settings(&self.app_handle);
+        if settings.uses_openai_transcription() {
+            return;
+        }
+
         let mut is_loading = self.is_loading.lock().unwrap();
         if *is_loading || self.is_model_loaded() {
             return;
@@ -437,7 +443,74 @@ impl TranscriptionManager {
         current_model.clone()
     }
 
-    pub fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
+    pub async fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
+        let settings = get_settings(&self.app_handle);
+        if settings.uses_openai_transcription() {
+            return self.transcribe_with_openai(audio).await;
+        }
+
+        let manager = self.clone();
+        tauri::async_runtime::spawn_blocking(move || manager.transcribe_local(audio))
+            .await
+            .map_err(|e| anyhow::anyhow!("Transcription task panicked: {}", e))?
+    }
+
+    async fn transcribe_with_openai(&self, audio: Vec<f32>) -> Result<String> {
+        #[cfg(debug_assertions)]
+        if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
+            return Err(anyhow::anyhow!(
+                "Simulated transcription failure (HANDY_FORCE_TRANSCRIPTION_FAILURE)"
+            ));
+        }
+
+        self.touch_activity();
+        let st = std::time::Instant::now();
+        debug!("Audio vector length: {}", audio.len());
+
+        if audio.is_empty() {
+            debug!("Empty audio vector");
+            return Ok(String::new());
+        }
+
+        let settings = get_settings(&self.app_handle);
+        let config = OpenAiTranscriptionConfig {
+            base_url: settings.openai_transcription_base_url.clone(),
+            api_key: settings.openai_transcription_api_key(),
+            model: settings.openai_transcription_model.clone(),
+            language: openai_transcription::normalize_language(&settings.selected_language),
+            prompt: if settings.custom_words.is_empty() {
+                None
+            } else {
+                Some(settings.custom_words.join(", "))
+            },
+            translate_to_english: settings.translate_to_english,
+        };
+
+        let transcription = openai_transcription::transcribe_samples(&audio, config).await?;
+        let filtered_result = filter_transcription_output(
+            &transcription,
+            &settings.app_language,
+            &settings.custom_filler_words,
+        );
+
+        info!(
+            "OpenAI transcription completed in {}ms",
+            st.elapsed().as_millis()
+        );
+
+        if filtered_result.is_empty() {
+            info!("Transcription result is empty");
+        } else {
+            info!(
+                "OpenAI transcription result received ({} chars)",
+                filtered_result.chars().count()
+            );
+        }
+
+        Ok(filtered_result)
+    }
+
+    fn transcribe_local(&self, audio: Vec<f32>) -> Result<String> {
         #[cfg(debug_assertions)]
         if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
             return Err(anyhow::anyhow!(

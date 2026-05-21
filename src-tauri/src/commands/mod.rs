@@ -32,7 +32,7 @@ pub fn get_app_dir_path(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 #[specta::specta]
 pub fn get_app_settings(app: AppHandle) -> Result<AppSettings, String> {
-    Ok(get_settings(&app))
+    Ok(get_settings(&app).without_openai_transcription_secret())
 }
 
 #[tauri::command]

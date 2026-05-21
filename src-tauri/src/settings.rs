@@ -9,6 +9,10 @@ use tauri_plugin_store::StoreExt;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
+pub const OPENAI_TRANSCRIPTION_PROVIDER_ID: &str = "openai";
+pub const OPENAI_TRANSCRIPTION_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+pub const OPENAI_TRANSCRIPTION_DEFAULT_MODEL: &str = "gpt-4o-transcribe";
+const REDACTED_SECRET_PLACEHOLDER: &str = "[REDACTED]";
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "lowercase")]
@@ -104,6 +108,19 @@ pub struct PostProcessProvider {
     pub models_endpoint: Option<String>,
     #[serde(default)]
     pub supports_structured_output: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscriptionProvider {
+    Local,
+    Openai,
+}
+
+impl Default for TranscriptionProvider {
+    fn default() -> Self {
+        TranscriptionProvider::Local
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
@@ -351,6 +368,14 @@ pub struct AppSettings {
     pub update_checks_enabled: bool,
     #[serde(default = "default_model")]
     pub selected_model: String,
+    #[serde(default)]
+    pub transcription_provider: TranscriptionProvider,
+    #[serde(default = "default_openai_transcription_base_url")]
+    pub openai_transcription_base_url: String,
+    #[serde(default = "default_openai_transcription_model")]
+    pub openai_transcription_model: String,
+    #[serde(default = "default_openai_transcription_api_keys")]
+    pub openai_transcription_api_keys: SecretMap,
     #[serde(default = "default_always_on_microphone")]
     pub always_on_microphone: bool,
     #[serde(default)]
@@ -434,6 +459,20 @@ pub struct AppSettings {
 
 fn default_model() -> String {
     "".to_string()
+}
+
+fn default_openai_transcription_base_url() -> String {
+    OPENAI_TRANSCRIPTION_DEFAULT_BASE_URL.to_string()
+}
+
+fn default_openai_transcription_model() -> String {
+    OPENAI_TRANSCRIPTION_DEFAULT_MODEL.to_string()
+}
+
+fn default_openai_transcription_api_keys() -> SecretMap {
+    let mut map = HashMap::new();
+    map.insert(OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(), String::new());
+    SecretMap(map)
 }
 
 fn default_always_on_microphone() -> bool {
@@ -774,6 +813,10 @@ pub fn get_default_settings() -> AppSettings {
         autostart_enabled: default_autostart_enabled(),
         update_checks_enabled: default_update_checks_enabled(),
         selected_model: "".to_string(),
+        transcription_provider: TranscriptionProvider::Local,
+        openai_transcription_base_url: default_openai_transcription_base_url(),
+        openai_transcription_model: default_openai_transcription_model(),
+        openai_transcription_api_keys: default_openai_transcription_api_keys(),
         always_on_microphone: false,
         selected_microphone: None,
         clamshell_microphone: None,
@@ -818,6 +861,26 @@ pub fn get_default_settings() -> AppSettings {
 }
 
 impl AppSettings {
+    pub fn without_openai_transcription_secret(mut self) -> Self {
+        for value in self.openai_transcription_api_keys.values_mut() {
+            if !value.is_empty() {
+                *value = REDACTED_SECRET_PLACEHOLDER.to_string();
+            }
+        }
+        self
+    }
+
+    pub fn uses_openai_transcription(&self) -> bool {
+        self.transcription_provider == TranscriptionProvider::Openai
+    }
+
+    pub fn openai_transcription_api_key(&self) -> String {
+        self.openai_transcription_api_keys
+            .get(OPENAI_TRANSCRIPTION_PROVIDER_ID)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub fn active_post_process_provider(&self) -> Option<&PostProcessProvider> {
         self.post_process_providers
             .iter()
@@ -959,6 +1022,30 @@ mod tests {
     }
 
     #[test]
+    fn default_settings_use_local_transcription() {
+        let settings = get_default_settings();
+        assert_eq!(
+            settings.transcription_provider,
+            TranscriptionProvider::Local
+        );
+        assert_eq!(
+            settings.openai_transcription_base_url,
+            OPENAI_TRANSCRIPTION_DEFAULT_BASE_URL
+        );
+        assert_eq!(
+            settings.openai_transcription_model,
+            OPENAI_TRANSCRIPTION_DEFAULT_MODEL
+        );
+        assert_eq!(
+            settings
+                .openai_transcription_api_keys
+                .get(OPENAI_TRANSCRIPTION_PROVIDER_ID)
+                .map(String::as_str),
+            Some("")
+        );
+    }
+
+    #[test]
     fn debug_output_redacts_api_keys() {
         let mut settings = get_default_settings();
         settings
@@ -971,12 +1058,36 @@ mod tests {
         settings
             .post_process_api_keys
             .insert("empty_provider".to_string(), "".to_string());
+        settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-proj-transcription-secret".to_string(),
+        );
 
         let debug_output = format!("{:?}", settings);
 
         assert!(!debug_output.contains("sk-proj-secret-key-12345"));
         assert!(!debug_output.contains("sk-ant-secret-key-67890"));
+        assert!(!debug_output.contains("sk-proj-transcription-secret"));
         assert!(debug_output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn frontend_settings_redact_openai_transcription_api_key() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-proj-transcription-secret".to_string(),
+        );
+
+        let frontend_settings = settings.without_openai_transcription_secret();
+
+        assert_eq!(
+            frontend_settings
+                .openai_transcription_api_keys
+                .get(OPENAI_TRANSCRIPTION_PROVIDER_ID)
+                .map(String::as_str),
+            Some(REDACTED_SECRET_PLACEHOLDER)
+        );
     }
 
     #[test]

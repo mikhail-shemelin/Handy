@@ -10,6 +10,7 @@ mod helpers;
 mod input;
 mod llm_client;
 mod managers;
+mod openai_transcription;
 mod overlay;
 pub mod portable;
 mod settings;
@@ -348,6 +349,10 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_auto_submit_key_setting,
             shortcut::change_post_process_enabled_setting,
             shortcut::change_experimental_enabled_setting,
+            shortcut::change_transcription_provider_setting,
+            shortcut::change_openai_transcription_base_url_setting,
+            shortcut::change_openai_transcription_api_key_setting,
+            shortcut::change_openai_transcription_model_setting,
             shortcut::change_post_process_base_url_setting,
             shortcut::change_post_process_api_key_setting,
             shortcut::change_post_process_model_setting,

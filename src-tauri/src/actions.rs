@@ -544,8 +544,9 @@ impl ShortcutAction for TranscribeAction {
                     });
 
                     // Transcribe concurrently with WAV save
+                    let cancel_generation = utils::cancellation_generation();
                     let transcription_time = Instant::now();
-                    let transcription_result = tm.transcribe(samples);
+                    let transcription_result = tm.transcribe(samples).await;
 
                     // Await WAV save and verify
                     let wav_saved = match wav_handle.await {
@@ -570,6 +571,13 @@ impl ShortcutAction for TranscribeAction {
                             false
                         }
                     };
+
+                    if utils::operation_cancelled_since(cancel_generation) {
+                        debug!("Skipping transcription output because operation was cancelled");
+                        utils::hide_recording_overlay(&ah);
+                        change_tray_icon(&ah, TrayIconState::Idle);
+                        return;
+                    }
 
                     match transcription_result {
                         Ok(transcription) => {

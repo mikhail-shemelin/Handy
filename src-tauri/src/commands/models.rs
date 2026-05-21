@@ -193,8 +193,16 @@ pub async fn is_model_loading(
 #[tauri::command]
 #[specta::specta]
 pub async fn has_any_models_available(
+    app: tauri::AppHandle,
     model_manager: State<'_, Arc<ModelManager>>,
 ) -> Result<bool, String> {
+    let settings = crate::settings::get_settings(&app);
+    if settings.uses_openai_transcription()
+        && !settings.openai_transcription_api_key().trim().is_empty()
+    {
+        return Ok(true);
+    }
+
     let models = model_manager.get_available_models();
     Ok(models.iter().any(|m| m.is_downloaded))
 }
@@ -202,8 +210,16 @@ pub async fn has_any_models_available(
 #[tauri::command]
 #[specta::specta]
 pub async fn has_any_models_or_downloads(
+    app: tauri::AppHandle,
     model_manager: State<'_, Arc<ModelManager>>,
 ) -> Result<bool, String> {
+    let settings = crate::settings::get_settings(&app);
+    if settings.uses_openai_transcription()
+        && !settings.openai_transcription_api_key().trim().is_empty()
+    {
+        return Ok(true);
+    }
+
     let models = model_manager.get_available_models();
     // Return true if any models are downloaded OR if any downloads are in progress
     Ok(models.iter().any(|m| m.is_downloaded))

@@ -7,6 +7,7 @@ import { ModelCard } from "@/components/onboarding";
 import { useModelStore } from "@/stores/modelStore";
 import { LANGUAGES } from "@/lib/constants/languages.ts";
 import type { ModelInfo } from "@/bindings";
+import { TranscriptionProviderSettings } from "../TranscriptionProviderSettings";
 
 // check if model supports a language based on its supported_languages list
 const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
@@ -207,6 +208,8 @@ export const ModelsSettings: React.FC = () => {
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-4">
+      <TranscriptionProviderSettings />
+
       <div className="mb-4">
         <h1 className="text-xl font-semibold mb-2">
           {t("settings.models.title")}

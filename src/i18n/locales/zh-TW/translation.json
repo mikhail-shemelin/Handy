@@ -537,6 +537,33 @@
           "details": "Handy 使用 Whisper.cpp 進行快速的本機語音轉文字處理。感謝 Georgi Gerganov 和貢獻者們的傑出工作"
         }
       }
+    },
+    "transcription": {
+      "title": "Transcription",
+      "provider": {
+        "title": "Provider",
+        "description": "Choose whether speech is transcribed locally or with OpenAI.",
+        "options": {
+          "local": "Local Models",
+          "openai": "OpenAI"
+        }
+      },
+      "openai": {
+        "endpoint": {
+          "title": "Endpoint",
+          "description": "OpenAI API base URL for transcription requests.",
+          "placeholder": "https://api.openai.com/v1"
+        },
+        "apiKey": {
+          "title": "API Key",
+          "description": "OpenAI API key used only for transcription requests.",
+          "placeholder": "sk-..."
+        },
+        "model": {
+          "title": "Model",
+          "description": "Choose the OpenAI speech-to-text model."
+        }
+      }
     }
   },
   "footer": {

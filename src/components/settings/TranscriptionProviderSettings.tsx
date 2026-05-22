@@ -1,9 +1,14 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { commands } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
-import { SettingContainer, SettingsGroup, ToggleSwitch } from "@/components/ui";
+import {
+  SettingContainer,
+  SettingsGroup,
+  Textarea,
+  ToggleSwitch,
+} from "@/components/ui";
 import { ApiKeyField } from "./PostProcessingSettingsApi/ApiKeyField";
 import { BaseUrlField } from "./PostProcessingSettingsApi/BaseUrlField";
 import { ModelSelect } from "./PostProcessingSettingsApi/ModelSelect";
@@ -17,12 +22,16 @@ const OPENAI_MODELS: ModelOption[] = [
   { value: "whisper-1", label: "whisper-1" },
 ];
 
+const supportsOpenAiChunking = (model: string) =>
+  model === "gpt-4o-transcribe" || model === "gpt-4o-mini-transcribe";
+
 export const TranscriptionProviderSettings: React.FC = () => {
   const { t } = useTranslation();
   const { settings, updateSetting, refreshSettings, isUpdating } =
     useSettings();
   const [isApiKeyUpdating, setIsApiKeyUpdating] = useState(false);
   const [isOpenAiToggleUpdating, setIsOpenAiToggleUpdating] = useState(false);
+  const [promptDraft, setPromptDraft] = useState("");
 
   const provider = settings?.transcription_provider ?? "local";
   const isOpenAiActive = provider === OPENAI_PROVIDER_ID;
@@ -31,6 +40,15 @@ export const TranscriptionProviderSettings: React.FC = () => {
     settings?.openai_transcription_api_keys?.[OPENAI_PROVIDER_ID] ?? "";
   const baseUrl = settings?.openai_transcription_base_url ?? "";
   const model = settings?.openai_transcription_model ?? "gpt-4o-transcribe";
+  const prompt = settings?.openai_transcription_prompt ?? "";
+  const chunkingEnabled =
+    settings?.openai_transcription_chunking_enabled ?? false;
+  const translateToEnglish = settings?.translate_to_english ?? false;
+  const supportsChunking = supportsOpenAiChunking(model) && !translateToEnglish;
+  const effectiveChunkingEnabled = supportsChunking && chunkingEnabled;
+  useEffect(() => {
+    setPromptDraft(prompt);
+  }, [prompt]);
   const modelOptions = useMemo(() => {
     if (!model || OPENAI_MODELS.some((option) => option.value === model)) {
       return OPENAI_MODELS;
@@ -108,6 +126,14 @@ export const TranscriptionProviderSettings: React.FC = () => {
 
   const handleModelBlur = useCallback(() => {}, []);
 
+  const handlePromptBlur = useCallback(async () => {
+    const value = promptDraft.trim();
+    if (value !== prompt) {
+      await updateSetting("openai_transcription_prompt", value);
+      await refreshSettings();
+    }
+  }, [prompt, promptDraft, refreshSettings, updateSetting]);
+
   return (
     <SettingsGroup title={t("settings.transcription.title")}>
       <ToggleSwitch
@@ -179,6 +205,44 @@ export const TranscriptionProviderSettings: React.FC = () => {
               className="min-w-[380px]"
             />
           </SettingContainer>
+
+          <SettingContainer
+            title={t("settings.transcription.openai.prompt.title")}
+            description={t("settings.transcription.openai.prompt.description")}
+            descriptionMode="tooltip"
+            layout="horizontal"
+            grouped={true}
+          >
+            <Textarea
+              value={promptDraft}
+              onChange={(event) => setPromptDraft(event.target.value)}
+              onBlur={handlePromptBlur}
+              placeholder={t(
+                "settings.transcription.openai.prompt.placeholder",
+              )}
+              disabled={isUpdating("openai_transcription_prompt")}
+              variant="compact"
+              className="min-w-[380px]"
+            />
+          </SettingContainer>
+
+          <ToggleSwitch
+            checked={effectiveChunkingEnabled}
+            onChange={(enabled) =>
+              void updateSetting(
+                "openai_transcription_chunking_enabled",
+                enabled,
+              )
+            }
+            isUpdating={isUpdating("openai_transcription_chunking_enabled")}
+            disabled={!supportsChunking}
+            label={t("settings.transcription.openai.chunking.title")}
+            description={t(
+              "settings.transcription.openai.chunking.description",
+            )}
+            descriptionMode="tooltip"
+            grouped={true}
+          />
         </>
       )}
     </SettingsGroup>

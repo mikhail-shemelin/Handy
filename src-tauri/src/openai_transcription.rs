@@ -17,17 +17,30 @@ pub struct OpenAiTranscriptionConfig {
     pub language: Option<String>,
     pub prompt: Option<String>,
     pub translate_to_english: bool,
+    pub include_logprobs: bool,
+    pub chunking_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct TranscriptionResponse {
     text: String,
+    logprobs: Option<Vec<OpenAiTranscriptionLogprob>>,
+}
+
+pub struct OpenAiTranscriptionResult {
+    pub text: String,
+    pub logprobs: Option<Vec<OpenAiTranscriptionLogprob>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAiTranscriptionLogprob {
+    pub logprob: f64,
 }
 
 pub async fn transcribe_samples(
     samples: &[f32],
     config: OpenAiTranscriptionConfig,
-) -> Result<String> {
+) -> Result<OpenAiTranscriptionResult> {
     let api_key = config.api_key.trim();
     if api_key.is_empty() {
         return Err(anyhow!("OpenAI transcription API key is required"));
@@ -63,10 +76,18 @@ pub async fn transcribe_samples(
         .file_name("recording.wav")
         .mime_str("audio/wav")?;
 
+    let include_logprobs =
+        config.include_logprobs && !config.translate_to_english && supports_logprobs(&model);
+
     let mut form = reqwest::multipart::Form::new()
         .part("file", file_part)
-        .text("model", model)
+        .text("model", model.clone())
         .text("response_format", "json");
+
+    if config.chunking_enabled && supports_chunking_strategy(&model) && !config.translate_to_english
+    {
+        form = form.text("chunking_strategy", "auto");
+    }
 
     if !config.translate_to_english {
         if let Some(language) = config.language.filter(|value| !value.trim().is_empty()) {
@@ -76,6 +97,10 @@ pub async fn transcribe_samples(
 
     if let Some(prompt) = config.prompt.filter(|value| !value.trim().is_empty()) {
         form = form.text("prompt", prompt);
+    }
+
+    if include_logprobs {
+        form = form.text("include[]", "logprobs");
     }
 
     let response = client
@@ -104,7 +129,10 @@ pub async fn transcribe_samples(
     }
 
     let transcription: TranscriptionResponse = response.json().await?;
-    Ok(transcription.text)
+    Ok(OpenAiTranscriptionResult {
+        text: transcription.text,
+        logprobs: transcription.logprobs,
+    })
 }
 
 pub fn normalize_base_url(base_url: &str) -> Result<String> {
@@ -140,6 +168,14 @@ fn model_for_request(config: &OpenAiTranscriptionConfig) -> String {
     } else {
         config.model.trim().to_string()
     }
+}
+
+fn supports_logprobs(model: &str) -> bool {
+    matches!(model, "gpt-4o-transcribe" | "gpt-4o-mini-transcribe")
+}
+
+fn supports_chunking_strategy(model: &str) -> bool {
+    matches!(model, "gpt-4o-transcribe" | "gpt-4o-mini-transcribe")
 }
 
 fn is_loopback_url(url: &Url) -> bool {
@@ -232,8 +268,17 @@ mod tests {
             language: Some("de".to_string()),
             prompt: None,
             translate_to_english: true,
+            include_logprobs: false,
+            chunking_enabled: true,
         };
 
         assert_eq!(model_for_request(&config), "whisper-1");
+    }
+
+    #[test]
+    fn enables_auto_chunking_for_gpt_transcription_models_only() {
+        assert!(supports_chunking_strategy("gpt-4o-transcribe"));
+        assert!(supports_chunking_strategy("gpt-4o-mini-transcribe"));
+        assert!(!supports_chunking_strategy("whisper-1"));
     }
 }

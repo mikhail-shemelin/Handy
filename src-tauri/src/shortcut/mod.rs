@@ -980,6 +980,22 @@ pub fn change_openai_transcription_model_setting(
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_openai_transcription_prompt_setting(app: AppHandle, prompt: String) {
+    let mut settings = settings::get_settings(&app);
+    settings.openai_transcription_prompt = prompt.trim().to_string();
+    settings::write_settings(&app, settings);
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_openai_transcription_chunking_enabled_setting(app: AppHandle, enabled: bool) {
+    let mut settings = settings::get_settings(&app);
+    settings.openai_transcription_chunking_enabled = enabled;
+    settings::write_settings(&app, settings);
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_post_process_base_url_setting(
     app: AppHandle,
     provider_id: String,

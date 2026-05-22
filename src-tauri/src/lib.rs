@@ -358,6 +358,8 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_openai_transcription_base_url_setting,
             shortcut::change_openai_transcription_api_key_setting,
             shortcut::change_openai_transcription_model_setting,
+            shortcut::change_openai_transcription_prompt_setting,
+            shortcut::change_openai_transcription_chunking_enabled_setting,
             shortcut::change_post_process_base_url_setting,
             shortcut::change_post_process_api_key_setting,
             shortcut::change_post_process_model_setting,

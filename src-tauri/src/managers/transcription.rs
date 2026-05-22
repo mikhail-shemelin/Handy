@@ -1,7 +1,7 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{EngineType, ModelManager};
-use crate::openai_transcription::{self, OpenAiTranscriptionConfig};
+use crate::openai_transcription::{self, OpenAiTranscriptionConfig, OpenAiTranscriptionLogprob};
 use crate::settings::{
     get_settings, ModelUnloadTimeout, OrtAcceleratorSetting, WhisperAcceleratorSetting,
 };
@@ -473,38 +473,61 @@ impl TranscriptionManager {
         }
 
         let settings = get_settings(&self.app_handle);
+        let model = settings.openai_transcription_model.clone();
+        let language = openai_transcription::normalize_language(&settings.selected_language);
+        let translate_to_english = settings.translate_to_english;
+        #[cfg(debug_assertions)]
+        let include_logprobs = true;
+        #[cfg(not(debug_assertions))]
+        let include_logprobs = false;
         let config = OpenAiTranscriptionConfig {
             base_url: settings.openai_transcription_base_url.clone(),
             api_key: settings.openai_transcription_api_key(),
-            model: settings.openai_transcription_model.clone(),
-            language: openai_transcription::normalize_language(&settings.selected_language),
-            prompt: if settings.custom_words.is_empty() {
-                None
-            } else {
-                Some(settings.custom_words.join(", "))
-            },
-            translate_to_english: settings.translate_to_english,
+            model: model.clone(),
+            language: language.clone(),
+            prompt: build_openai_transcription_prompt(
+                &settings.openai_transcription_prompt,
+                &settings.custom_words,
+            ),
+            translate_to_english,
+            include_logprobs,
+            chunking_enabled: settings.openai_transcription_chunking_enabled,
         };
 
-        let transcription = openai_transcription::transcribe_samples(&audio, config).await?;
+        let transcription = match openai_transcription::transcribe_samples(&audio, config).await {
+            Ok(transcription) => transcription,
+            Err(error) => {
+                error!(
+                    "OpenAI transcription failed (model={}, language={}, translate={}): {}",
+                    model,
+                    language.as_deref().unwrap_or("auto"),
+                    translate_to_english,
+                    error
+                );
+                return Err(error);
+            }
+        };
+        if let Some(logprobs) = transcription.logprobs.as_deref() {
+            log_openai_logprob_summary(logprobs);
+        }
         let filtered_result = filter_transcription_output(
-            &transcription,
+            &transcription.text,
             &settings.app_language,
             &settings.custom_filler_words,
         );
 
         info!(
-            "OpenAI transcription completed in {}ms",
-            st.elapsed().as_millis()
+            "OpenAI transcription completed in {}ms (model={}, language={}, translate={})",
+            st.elapsed().as_millis(),
+            model,
+            language.as_deref().unwrap_or("auto"),
+            translate_to_english
         );
 
         if filtered_result.is_empty() {
             info!("Transcription result is empty");
         } else {
-            info!(
-                "OpenAI transcription result received ({} chars)",
-                filtered_result.chars().count()
-            );
+            info!("Transcription result: {}", filtered_result);
         }
 
         Ok(filtered_result)
@@ -803,6 +826,66 @@ impl TranscriptionManager {
         self.maybe_unload_immediately("transcription");
 
         Ok(final_result)
+    }
+}
+
+fn log_openai_logprob_summary(logprobs: &[OpenAiTranscriptionLogprob]) {
+    if logprobs.is_empty() {
+        return;
+    }
+
+    let count = logprobs.len();
+    let average = logprobs.iter().map(|entry| entry.logprob).sum::<f64>() / count as f64;
+    let min_entry = logprobs
+        .iter()
+        .min_by(|left, right| left.logprob.total_cmp(&right.logprob))
+        .expect("logprobs is not empty");
+    info!(
+        "OpenAI transcription logprobs: tokens={}, avg={:.3}, min={:.3}",
+        count, average, min_entry.logprob
+    );
+}
+
+fn build_openai_transcription_prompt(
+    custom_prompt: &str,
+    custom_words: &[String],
+) -> Option<String> {
+    let mut prompt_parts = Vec::new();
+    let custom_prompt = custom_prompt.trim();
+    if !custom_prompt.is_empty() {
+        prompt_parts.push(custom_prompt.to_string());
+    }
+    if !custom_words.is_empty() {
+        prompt_parts.push(custom_words.join(", "));
+    }
+
+    if prompt_parts.is_empty() {
+        None
+    } else {
+        Some(prompt_parts.join("\n\n"))
+    }
+}
+
+#[cfg(test)]
+mod openai_prompt_tests {
+    use super::build_openai_transcription_prompt;
+
+    #[test]
+    fn keeps_existing_custom_word_prompt_for_openai() {
+        let custom_words = vec!["Handy".to_string(), "Parakeet".to_string()];
+        assert_eq!(
+            build_openai_transcription_prompt("", &custom_words).as_deref(),
+            Some("Handy, Parakeet")
+        );
+    }
+
+    #[test]
+    fn combines_openai_prompt_with_custom_words() {
+        let custom_words = vec!["Handy".to_string()];
+        assert_eq!(
+            build_openai_transcription_prompt("Transcribe literally.", &custom_words).as_deref(),
+            Some("Transcribe literally.\n\nHandy")
+        );
     }
 }
 

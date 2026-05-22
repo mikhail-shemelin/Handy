@@ -146,6 +146,16 @@ const settingUpdaters: {
     unwrapCommandResult(
       commands.changeOpenaiTranscriptionModelSetting(value as string),
     ),
+  openai_transcription_prompt: (value) =>
+    unwrapCommandResult(
+      commands.changeOpenaiTranscriptionPromptSetting(value as string),
+    ),
+  openai_transcription_chunking_enabled: (value) =>
+    unwrapCommandResult(
+      commands.changeOpenaiTranscriptionChunkingEnabledSetting(
+        value as boolean,
+      ),
+    ),
   push_to_talk: (value) => commands.changePttSetting(value as boolean),
   selected_microphone: (value) =>
     commands.setSelectedMicrophone(

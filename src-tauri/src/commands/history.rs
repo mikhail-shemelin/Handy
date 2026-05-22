@@ -3,6 +3,7 @@ use crate::managers::{
     history::{HistoryManager, PaginatedHistory},
     transcription::TranscriptionManager,
 };
+use log::error;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 
@@ -86,7 +87,13 @@ pub async fn retry_history_entry_transcription(
     let transcription = transcription_manager
         .transcribe(samples)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            error!(
+                "Failed to retry transcription for history entry {} ({}): {}",
+                id, entry.file_name, e
+            );
+            e.to_string()
+        })?;
 
     if transcription.is_empty() {
         return Err("Recording contains no speech".to_string());

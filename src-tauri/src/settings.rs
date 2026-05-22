@@ -376,6 +376,10 @@ pub struct AppSettings {
     pub openai_transcription_base_url: String,
     #[serde(default = "default_openai_transcription_model")]
     pub openai_transcription_model: String,
+    #[serde(default)]
+    pub openai_transcription_prompt: String,
+    #[serde(default)]
+    pub openai_transcription_chunking_enabled: bool,
     #[serde(default = "default_openai_transcription_api_keys")]
     pub openai_transcription_api_keys: SecretMap,
     #[serde(default = "default_always_on_microphone")]
@@ -838,6 +842,8 @@ pub fn get_default_settings() -> AppSettings {
         openai_transcription_enabled: false,
         openai_transcription_base_url: default_openai_transcription_base_url(),
         openai_transcription_model: default_openai_transcription_model(),
+        openai_transcription_prompt: String::new(),
+        openai_transcription_chunking_enabled: false,
         openai_transcription_api_keys: default_openai_transcription_api_keys(),
         always_on_microphone: false,
         selected_microphone: None,
@@ -1093,6 +1099,7 @@ mod tests {
             settings.openai_transcription_model,
             OPENAI_TRANSCRIPTION_DEFAULT_MODEL
         );
+        assert!(!settings.openai_transcription_chunking_enabled);
         assert_eq!(
             settings
                 .openai_transcription_api_keys

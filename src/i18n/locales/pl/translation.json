@@ -569,10 +569,19 @@
           "title": "Model",
           "description": "Choose the OpenAI speech-to-text model."
         },
+        "prompt": {
+          "title": "Prompt",
+          "description": "Optional context sent with OpenAI transcription requests.",
+          "placeholder": "Optional transcription context"
+        },
         "enabled": {
           "title": "Enable OpenAI transcription",
           "description": "Show OpenAI as a selectable transcription option in the model selector.",
           "disableBlocked": "Download a local model before disabling OpenAI transcription."
+        },
+        "chunking": {
+          "title": "Automatic chunking",
+          "description": "Use OpenAI server-side chunking for supported GPT transcription models."
         }
       }
     }

@@ -142,22 +142,27 @@ pub fn update_tray_menu(app: &AppHandle, state: &TrayIconState, locale: Option<&
     let model_manager = app.state::<Arc<ModelManager>>();
     let models = model_manager.get_available_models();
     let current_model_id = &settings.selected_model;
+    let local_route_active = !settings.uses_openai_transcription();
 
     let mut downloaded: Vec<_> = models.into_iter().filter(|m| m.is_downloaded).collect();
     downloaded.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let submenu_label = downloaded
-        .iter()
-        .find(|m| m.id == *current_model_id)
-        .map(|m| m.name.clone())
-        .unwrap_or_else(|| strings.model.clone());
+    let submenu_label = if local_route_active {
+        downloaded
+            .iter()
+            .find(|m| m.id == *current_model_id)
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| strings.model.clone())
+    } else {
+        strings.model.clone()
+    };
 
     let model_submenu = {
         let submenu = Submenu::with_id(app, "model_submenu", &submenu_label, true)
             .expect("failed to create model submenu");
 
         for model in &downloaded {
-            let is_active = model.id == *current_model_id;
+            let is_active = local_route_active && model.id == *current_model_id;
             let item_id = format!("model_select:{}", model.id);
             let item =
                 CheckMenuItem::with_id(app, &item_id, &model.name, true, is_active, None::<&str>)

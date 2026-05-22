@@ -1,6 +1,6 @@
 use crate::managers::model::{ModelInfo, ModelManager};
 use crate::managers::transcription::{ModelStateEvent, TranscriptionManager};
-use crate::settings::{get_settings, write_settings, ModelUnloadTimeout};
+use crate::settings::{get_settings, write_settings, ModelUnloadTimeout, TranscriptionProvider};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -74,7 +74,11 @@ pub async fn delete_model(
 /// Validates the model, updates the persisted setting, and loads the model
 /// unless the unload timeout is set to "Immediately" (in which case the model
 /// will be loaded on-demand during the next transcription).
-pub fn switch_active_model(app: &AppHandle, model_id: &str) -> Result<(), String> {
+fn switch_active_model_internal(
+    app: &AppHandle,
+    model_id: &str,
+    force_load: bool,
+) -> Result<(), String> {
     let model_manager = app.state::<Arc<ModelManager>>();
     let transcription_manager = app.state::<Arc<TranscriptionManager>>();
 
@@ -97,11 +101,13 @@ pub fn switch_active_model(app: &AppHandle, model_id: &str) -> Result<(), String
     let settings = get_settings(app);
     let unload_timeout = settings.model_unload_timeout;
     let old_model = settings.selected_model.clone();
+    let old_provider = settings.transcription_provider;
 
     // Persist the new selection early so the frontend sees the correct model
     // when it reacts to events emitted by load_model.
     let mut settings = settings;
     settings.selected_model = model_id.to_string();
+    settings.transcription_provider = TranscriptionProvider::Local;
 
     // Reset language to auto if the new model doesn't support the currently selected language.
     // This prevents stale language settings from causing errors (e.g. Canary receiving zh-Hans)
@@ -124,7 +130,7 @@ pub fn switch_active_model(app: &AppHandle, model_id: &str) -> Result<(), String
 
     // Skip eager loading if unload is set to "Immediately" — the model
     // will be loaded on-demand during the next transcription.
-    if unload_timeout == ModelUnloadTimeout::Immediately {
+    if unload_timeout == ModelUnloadTimeout::Immediately && !force_load {
         // Notify frontend — load_model won't be called so no events
         // would otherwise be emitted.
         let _ = app.emit(
@@ -145,13 +151,26 @@ pub fn switch_active_model(app: &AppHandle, model_id: &str) -> Result<(), String
 
     // Load the model. On failure, revert the persisted selection.
     if let Err(e) = transcription_manager.load_model(model_id) {
-        let mut settings = get_settings(app);
-        settings.selected_model = old_model;
-        write_settings(app, settings);
+        let mut latest_settings = get_settings(app);
+        if latest_settings.transcription_provider == TranscriptionProvider::Local
+            && latest_settings.selected_model == model_id
+        {
+            latest_settings.selected_model = old_model;
+            latest_settings.transcription_provider = old_provider;
+            write_settings(app, latest_settings);
+        }
         return Err(e.to_string());
     }
 
     Ok(())
+}
+
+pub fn switch_active_model(app: &AppHandle, model_id: &str) -> Result<(), String> {
+    switch_active_model_internal(app, model_id, false)
+}
+
+pub fn switch_active_model_and_load(app: &AppHandle, model_id: &str) -> Result<(), String> {
+    switch_active_model_internal(app, model_id, true)
 }
 
 #[tauri::command]
@@ -163,6 +182,23 @@ pub async fn set_active_model(
     model_id: String,
 ) -> Result<(), String> {
     switch_active_model(&app_handle, &model_id)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn auto_select_local_model_if_active_route_is_local(
+    app_handle: AppHandle,
+    _model_manager: State<'_, Arc<ModelManager>>,
+    _transcription_manager: State<'_, Arc<TranscriptionManager>>,
+    model_id: String,
+) -> Result<bool, String> {
+    let settings = get_settings(&app_handle);
+    if settings.uses_openai_transcription() {
+        return Ok(false);
+    }
+
+    switch_active_model(&app_handle, &model_id)?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -190,6 +226,23 @@ pub async fn is_model_loading(
     Ok(current_model.is_none())
 }
 
+fn has_available_transcription_route(
+    settings: &crate::settings::AppSettings,
+    models: &[ModelInfo],
+    include_downloads: bool,
+) -> bool {
+    let local_available = models
+        .iter()
+        .any(|model| model.is_downloaded || (include_downloads && model.is_downloading));
+
+    match settings.transcription_provider {
+        TranscriptionProvider::Local => local_available,
+        TranscriptionProvider::Openai => {
+            settings.has_configured_openai_transcription() || local_available
+        }
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn has_any_models_available(
@@ -197,14 +250,8 @@ pub async fn has_any_models_available(
     model_manager: State<'_, Arc<ModelManager>>,
 ) -> Result<bool, String> {
     let settings = crate::settings::get_settings(&app);
-    if settings.uses_openai_transcription()
-        && !settings.openai_transcription_api_key().trim().is_empty()
-    {
-        return Ok(true);
-    }
-
     let models = model_manager.get_available_models();
-    Ok(models.iter().any(|m| m.is_downloaded))
+    Ok(has_available_transcription_route(&settings, &models, false))
 }
 
 #[tauri::command]
@@ -214,15 +261,9 @@ pub async fn has_any_models_or_downloads(
     model_manager: State<'_, Arc<ModelManager>>,
 ) -> Result<bool, String> {
     let settings = crate::settings::get_settings(&app);
-    if settings.uses_openai_transcription()
-        && !settings.openai_transcription_api_key().trim().is_empty()
-    {
-        return Ok(true);
-    }
-
     let models = model_manager.get_available_models();
     // Return true if any models are downloaded OR if any downloads are in progress
-    Ok(models.iter().any(|m| m.is_downloaded))
+    Ok(has_available_transcription_route(&settings, &models, true))
 }
 
 #[tauri::command]
@@ -234,4 +275,95 @@ pub async fn cancel_download(
     model_manager
         .cancel_download(&model_id)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::managers::model::EngineType;
+    use crate::settings::{get_default_settings, OPENAI_TRANSCRIPTION_PROVIDER_ID};
+
+    fn model(id: &str, is_downloaded: bool, is_downloading: bool) -> ModelInfo {
+        ModelInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            filename: format!("{id}.bin"),
+            url: None,
+            sha256: None,
+            size_mb: 1,
+            is_downloaded,
+            is_downloading,
+            partial_size: 0,
+            is_directory: false,
+            engine_type: EngineType::Whisper,
+            accuracy_score: 0.0,
+            speed_score: 0.0,
+            supports_translation: false,
+            is_recommended: false,
+            supported_languages: Vec::new(),
+            supports_language_selection: false,
+            is_custom: false,
+        }
+    }
+
+    #[test]
+    fn route_availability_counts_downloaded_local_when_active_openai_is_invalid() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_enabled = true;
+        settings.transcription_provider = TranscriptionProvider::Openai;
+
+        assert!(settings.uses_openai_transcription());
+        assert!(!settings.has_configured_openai_transcription());
+        assert!(has_available_transcription_route(
+            &settings,
+            &[model("parakeet-v3", true, false)],
+            false
+        ));
+    }
+
+    #[test]
+    fn route_availability_counts_active_configured_openai_even_without_local_models() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_enabled = true;
+        settings.transcription_provider = TranscriptionProvider::Openai;
+        settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-test".to_string(),
+        );
+
+        assert!(has_available_transcription_route(&settings, &[], false));
+    }
+
+    #[test]
+    fn route_availability_rejects_inactive_configured_openai_without_local_models() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_enabled = true;
+        settings.transcription_provider = TranscriptionProvider::Local;
+        settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-test".to_string(),
+        );
+
+        assert!(!has_available_transcription_route(&settings, &[], false));
+    }
+
+    #[test]
+    fn route_availability_rejects_unconfigured_openai_without_local_models() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_enabled = true;
+
+        assert!(!has_available_transcription_route(&settings, &[], false));
+    }
+
+    #[test]
+    fn route_availability_only_counts_downloads_when_requested() {
+        let settings = get_default_settings();
+        let models = [model("parakeet-v3", false, true)];
+
+        assert!(!has_available_transcription_route(
+            &settings, &models, false
+        ));
+        assert!(has_available_transcription_route(&settings, &models, true));
+    }
 }

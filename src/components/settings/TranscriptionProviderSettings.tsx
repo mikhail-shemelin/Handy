@@ -1,8 +1,9 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { commands, type TranscriptionProvider } from "@/bindings";
+import { toast } from "sonner";
+import { commands } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
-import { Dropdown, SettingContainer, SettingsGroup } from "@/components/ui";
+import { SettingContainer, SettingsGroup, ToggleSwitch } from "@/components/ui";
 import { ApiKeyField } from "./PostProcessingSettingsApi/ApiKeyField";
 import { BaseUrlField } from "./PostProcessingSettingsApi/BaseUrlField";
 import { ModelSelect } from "./PostProcessingSettingsApi/ModelSelect";
@@ -16,20 +17,16 @@ const OPENAI_MODELS: ModelOption[] = [
   { value: "whisper-1", label: "whisper-1" },
 ];
 
-type TranscriptionProviderSettingsProps = {
-  onOpenAiApiKeySaved?: () => void | Promise<void>;
-};
-
-export const TranscriptionProviderSettings: React.FC<
-  TranscriptionProviderSettingsProps
-> = ({ onOpenAiApiKeySaved }) => {
+export const TranscriptionProviderSettings: React.FC = () => {
   const { t } = useTranslation();
   const { settings, updateSetting, refreshSettings, isUpdating } =
     useSettings();
   const [isApiKeyUpdating, setIsApiKeyUpdating] = useState(false);
+  const [isOpenAiToggleUpdating, setIsOpenAiToggleUpdating] = useState(false);
 
   const provider = settings?.transcription_provider ?? "local";
-  const isOpenAi = provider === OPENAI_PROVIDER_ID;
+  const isOpenAiActive = provider === OPENAI_PROVIDER_ID;
+  const openAiEnabled = settings?.openai_transcription_enabled ?? false;
   const apiKey =
     settings?.openai_transcription_api_keys?.[OPENAI_PROVIDER_ID] ?? "";
   const baseUrl = settings?.openai_transcription_base_url ?? "";
@@ -42,35 +39,40 @@ export const TranscriptionProviderSettings: React.FC<
     return [...OPENAI_MODELS, { value: model, label: model }];
   }, [model]);
 
-  const providerOptions = [
-    {
-      value: "local",
-      label: t("settings.transcription.provider.options.local"),
+  const handleOpenAiEnabledChange = useCallback(
+    async (enabled: boolean) => {
+      setIsOpenAiToggleUpdating(true);
+      try {
+        const result =
+          await commands.changeOpenaiTranscriptionEnabledSetting(enabled);
+        if (result.status === "error") {
+          throw new Error(String(result.error));
+        }
+        await refreshSettings();
+      } catch (error) {
+        console.error("Failed to update OpenAI transcription toggle:", error);
+        await refreshSettings();
+        if (!enabled && isOpenAiActive) {
+          toast.error(
+            t("settings.transcription.openai.enabled.disableBlocked"),
+          );
+        }
+      } finally {
+        setIsOpenAiToggleUpdating(false);
+      }
     },
-    {
-      value: OPENAI_PROVIDER_ID,
-      label: t("settings.transcription.provider.options.openai"),
-    },
-  ];
-
-  const handleProviderSelect = useCallback(
-    (value: string) => {
-      void updateSetting(
-        "transcription_provider",
-        value as TranscriptionProvider,
-      );
-    },
-    [updateSetting],
+    [isOpenAiActive, refreshSettings, t],
   );
 
   const handleBaseUrlChange = useCallback(
-    (value: string) => {
+    async (value: string) => {
       const trimmed = value.trim().replace(/\/+$/, "");
       if (trimmed !== baseUrl) {
-        void updateSetting("openai_transcription_base_url", trimmed);
+        await updateSetting("openai_transcription_base_url", trimmed);
+        await refreshSettings();
       }
     },
-    [baseUrl, updateSetting],
+    [baseUrl, refreshSettings, updateSetting],
   );
 
   const handleApiKeyChange = useCallback(
@@ -80,23 +82,12 @@ export const TranscriptionProviderSettings: React.FC<
 
       setIsApiKeyUpdating(true);
       try {
-        if (provider === OPENAI_PROVIDER_ID) {
-          const providerResult =
-            await commands.changeTranscriptionProviderSetting(
-              provider as TranscriptionProvider,
-            );
-          if (providerResult.status === "error") {
-            throw new Error(String(providerResult.error));
-          }
-        }
-
         const result =
           await commands.changeOpenaiTranscriptionApiKeySetting(trimmed);
         if (result.status === "error") {
           throw new Error(String(result.error));
         }
         await refreshSettings();
-        await onOpenAiApiKeySaved?.();
       } catch (error) {
         console.error("Failed to update OpenAI transcription API key:", error);
         await refreshSettings();
@@ -104,36 +95,34 @@ export const TranscriptionProviderSettings: React.FC<
         setIsApiKeyUpdating(false);
       }
     },
-    [apiKey, onOpenAiApiKeySaved, provider, refreshSettings],
+    [apiKey, refreshSettings],
   );
 
   const handleModelSelect = useCallback(
-    (value: string) => {
-      void updateSetting("openai_transcription_model", value.trim());
+    async (value: string) => {
+      await updateSetting("openai_transcription_model", value.trim());
+      await refreshSettings();
     },
-    [updateSetting],
+    [refreshSettings, updateSetting],
   );
 
   const handleModelBlur = useCallback(() => {}, []);
 
   return (
     <SettingsGroup title={t("settings.transcription.title")}>
-      <SettingContainer
-        title={t("settings.transcription.provider.title")}
-        description={t("settings.transcription.provider.description")}
+      <ToggleSwitch
+        checked={openAiEnabled}
+        onChange={(enabled) => void handleOpenAiEnabledChange(enabled)}
+        isUpdating={
+          isOpenAiToggleUpdating || isUpdating("openai_transcription_enabled")
+        }
+        label={t("settings.transcription.openai.enabled.title")}
+        description={t("settings.transcription.openai.enabled.description")}
         descriptionMode="tooltip"
-        layout="horizontal"
         grouped={true}
-      >
-        <Dropdown
-          options={providerOptions}
-          selectedValue={provider}
-          onSelect={handleProviderSelect}
-          disabled={isUpdating("transcription_provider")}
-        />
-      </SettingContainer>
+      />
 
-      {isOpenAi && (
+      {openAiEnabled && (
         <>
           <SettingContainer
             title={t("settings.transcription.openai.endpoint.title")}

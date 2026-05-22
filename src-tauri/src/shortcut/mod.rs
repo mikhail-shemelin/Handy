@@ -16,9 +16,11 @@ mod tauri_impl;
 use log::{error, info, warn};
 use serde::Serialize;
 use specta::Type;
-use tauri::{AppHandle, Emitter, Manager};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::managers::model::{ModelInfo, ModelManager};
 use crate::openai_transcription;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::settings::APPLE_INTELLIGENCE_DEFAULT_MODEL_ID;
@@ -829,12 +831,104 @@ pub fn change_experimental_enabled_setting(app: AppHandle, enabled: bool) -> Res
 #[specta::specta]
 pub fn change_transcription_provider_setting(
     app: AppHandle,
+    model_manager: State<'_, Arc<ModelManager>>,
     provider: TranscriptionProvider,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
+    match provider {
+        TranscriptionProvider::Openai => validate_openai_transcription_route(&settings)?,
+        TranscriptionProvider::Local => {
+            let selected_model = model_manager.get_model_info(&settings.selected_model);
+            let available_models = model_manager.get_available_models();
+            select_valid_local_model_before_disabling_openai(
+                &mut settings,
+                selected_model,
+                available_models,
+            )?;
+        }
+    }
+
     settings.transcription_provider = provider;
     settings::write_settings(&app, settings);
+    crate::tray::update_tray_menu(&app, &crate::tray::TrayIconState::Idle, None);
     Ok(())
+}
+
+fn validate_openai_transcription_route(settings: &settings::AppSettings) -> Result<(), String> {
+    if !settings.openai_transcription_enabled {
+        return Err("OpenAI transcription is not enabled".to_string());
+    }
+
+    if settings.openai_transcription_api_key().trim().is_empty() {
+        return Err("OpenAI transcription API key is required".to_string());
+    }
+
+    openai_transcription::normalize_base_url(&settings.openai_transcription_base_url)
+        .map_err(|error| error.to_string())?;
+
+    if settings.openai_transcription_model.trim().is_empty() {
+        return Err("OpenAI transcription model is required".to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_openai_transcription_enabled_setting(
+    app: AppHandle,
+    model_manager: State<'_, Arc<ModelManager>>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    if !enabled {
+        let selected_model_id = settings.selected_model.clone();
+        let selected_model = model_manager.get_model_info(&selected_model_id);
+        let available_models = model_manager.get_available_models();
+        select_valid_local_model_before_disabling_openai(
+            &mut settings,
+            selected_model,
+            available_models,
+        )?;
+        let local_model_to_load = settings.selected_model.clone();
+
+        if settings.transcription_provider == TranscriptionProvider::Openai {
+            crate::commands::models::switch_active_model_and_load(&app, &local_model_to_load)?;
+            settings = settings::get_settings(&app);
+        }
+    }
+
+    settings.set_openai_transcription_enabled(enabled);
+    settings::write_settings(&app, settings);
+    crate::tray::update_tray_menu(&app, &crate::tray::TrayIconState::Idle, None);
+    Ok(())
+}
+
+fn select_valid_local_model_before_disabling_openai(
+    settings: &mut settings::AppSettings,
+    selected_model: Option<ModelInfo>,
+    available_models: Vec<ModelInfo>,
+) -> Result<(), String> {
+    if settings.transcription_provider != TranscriptionProvider::Openai {
+        return Ok(());
+    }
+
+    let current_selection_is_valid = selected_model
+        .map(|model| model.is_downloaded)
+        .unwrap_or(false);
+    if current_selection_is_valid {
+        return Ok(());
+    }
+
+    if let Some(model) = available_models
+        .into_iter()
+        .find(|model| model.is_downloaded)
+    {
+        settings.selected_model = model.id;
+        return Ok(());
+    }
+
+    Err("Download a local model before disabling OpenAI transcription.".to_string())
 }
 
 #[tauri::command]
@@ -1214,4 +1308,129 @@ pub async fn get_available_accelerators() -> crate::managers::transcription::Ava
     tauri::async_runtime::spawn_blocking(crate::managers::transcription::get_available_accelerators)
         .await
         .expect("get_available_accelerators panicked")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::managers::model::EngineType;
+
+    fn configured_openai_settings() -> settings::AppSettings {
+        let mut app_settings = settings::get_default_settings();
+        app_settings.openai_transcription_enabled = true;
+        app_settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-test".to_string(),
+        );
+        app_settings
+    }
+
+    fn downloaded_model(id: &str) -> ModelInfo {
+        ModelInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            filename: format!("{id}.bin"),
+            url: None,
+            sha256: None,
+            size_mb: 1,
+            is_downloaded: true,
+            is_downloading: false,
+            partial_size: 0,
+            is_directory: false,
+            engine_type: EngineType::Whisper,
+            accuracy_score: 0.0,
+            speed_score: 0.0,
+            supports_translation: false,
+            is_recommended: false,
+            supported_languages: Vec::new(),
+            supports_language_selection: false,
+            is_custom: false,
+        }
+    }
+
+    #[test]
+    fn openai_route_validation_rejects_disabled_openai() {
+        let mut app_settings = configured_openai_settings();
+        app_settings.openai_transcription_enabled = false;
+
+        assert_eq!(
+            validate_openai_transcription_route(&app_settings),
+            Err("OpenAI transcription is not enabled".to_string())
+        );
+    }
+
+    #[test]
+    fn openai_route_validation_rejects_missing_api_key() {
+        let mut app_settings = configured_openai_settings();
+        app_settings
+            .openai_transcription_api_keys
+            .insert(OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(), String::new());
+
+        assert_eq!(
+            validate_openai_transcription_route(&app_settings),
+            Err("OpenAI transcription API key is required".to_string())
+        );
+    }
+
+    #[test]
+    fn openai_route_validation_rejects_invalid_endpoint() {
+        let mut app_settings = configured_openai_settings();
+        app_settings.openai_transcription_base_url = "http://example.com".to_string();
+
+        assert_eq!(
+            validate_openai_transcription_route(&app_settings),
+            Err(
+                "OpenAI transcription endpoint must use HTTPS unless it points to localhost"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn openai_route_validation_accepts_configured_openai() {
+        assert!(validate_openai_transcription_route(&configured_openai_settings()).is_ok());
+    }
+
+    #[test]
+    fn openai_disable_validation_rejects_active_openai_without_local_model() {
+        let mut app_settings = configured_openai_settings();
+        app_settings.transcription_provider = TranscriptionProvider::Openai;
+        app_settings.selected_model = String::new();
+
+        assert_eq!(
+            select_valid_local_model_before_disabling_openai(&mut app_settings, None, Vec::new()),
+            Err("Download a local model before disabling OpenAI transcription.".to_string())
+        );
+    }
+
+    #[test]
+    fn openai_disable_validation_accepts_active_openai_with_valid_local_model() {
+        let mut app_settings = configured_openai_settings();
+        app_settings.transcription_provider = TranscriptionProvider::Openai;
+        app_settings.selected_model = "parakeet-v3".to_string();
+
+        assert!(select_valid_local_model_before_disabling_openai(
+            &mut app_settings,
+            Some(downloaded_model("parakeet-v3")),
+            Vec::new()
+        )
+        .is_ok());
+        assert_eq!(app_settings.selected_model, "parakeet-v3");
+    }
+
+    #[test]
+    fn openai_disable_validation_selects_available_local_model() {
+        let mut app_settings = configured_openai_settings();
+        app_settings.transcription_provider = TranscriptionProvider::Openai;
+        app_settings.selected_model = "deleted-model".to_string();
+
+        assert!(select_valid_local_model_before_disabling_openai(
+            &mut app_settings,
+            None,
+            vec![downloaded_model("parakeet-v3")]
+        )
+        .is_ok());
+        assert_eq!(app_settings.selected_model, "parakeet-v3");
+    }
 }

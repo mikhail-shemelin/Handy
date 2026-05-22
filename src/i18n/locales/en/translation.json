@@ -148,7 +148,13 @@
       "languageOnly": "{{language}} Only",
       "translation": "Can translate to English",
       "translate": "Translate to English"
-    }
+    },
+    "openaiCloudDescription": "Cloud transcription",
+    "openaiDisabled": "Enable OpenAI transcription in Models settings",
+    "openaiMissingApiKey": "Add an OpenAI API key in Models settings",
+    "openaiMissingEndpoint": "Add an OpenAI endpoint in Models settings",
+    "openaiMissingModel": "Choose an OpenAI transcription model",
+    "openaiConfigurationRequired": "{{provider}} setup required"
   },
   "settings": {
     "modelSettings": {
@@ -382,6 +388,11 @@
         "model": {
           "title": "Model",
           "description": "Choose the OpenAI speech-to-text model."
+        },
+        "enabled": {
+          "title": "Enable OpenAI transcription",
+          "description": "Show OpenAI as a selectable transcription option in the model selector.",
+          "disableBlocked": "Download a local model before disabling OpenAI transcription."
         }
       }
     },

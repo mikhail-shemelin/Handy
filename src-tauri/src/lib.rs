@@ -116,13 +116,17 @@ fn show_main_window(app: &AppHandle) {
 fn should_force_show_permissions_window(app: &AppHandle) -> bool {
     #[cfg(target_os = "windows")]
     {
+        let settings = settings::get_settings(app);
         let model_manager = app.state::<Arc<ModelManager>>();
         let has_downloaded_models = model_manager
             .get_available_models()
             .iter()
             .any(|model| model.is_downloaded);
+        let has_available_transcription_route = has_downloaded_models
+            || (settings.uses_openai_transcription()
+                && settings.has_configured_openai_transcription());
 
-        if !has_downloaded_models {
+        if !has_available_transcription_route {
             return false;
         }
 
@@ -241,8 +245,8 @@ fn initialize_core_logic(app_handle: &AppHandle) {
             }
             id if id.starts_with("model_select:") => {
                 let model_id = id.strip_prefix("model_select:").unwrap().to_string();
-                let current_model = settings::get_settings(app).selected_model;
-                if model_id == current_model {
+                let settings = settings::get_settings(app);
+                if model_id == settings.selected_model && !settings.uses_openai_transcription() {
                     return;
                 }
                 let app_clone = app.clone();
@@ -350,6 +354,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_post_process_enabled_setting,
             shortcut::change_experimental_enabled_setting,
             shortcut::change_transcription_provider_setting,
+            shortcut::change_openai_transcription_enabled_setting,
             shortcut::change_openai_transcription_base_url_setting,
             shortcut::change_openai_transcription_api_key_setting,
             shortcut::change_openai_transcription_model_setting,
@@ -400,6 +405,7 @@ pub fn run(cli_args: CliArgs) {
             commands::models::delete_model,
             commands::models::cancel_download,
             commands::models::set_active_model,
+            commands::models::auto_select_local_model_if_active_route_is_local,
             commands::models::get_current_model,
             commands::models::get_transcription_model_status,
             commands::models::is_model_loading,

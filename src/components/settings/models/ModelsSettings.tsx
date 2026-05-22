@@ -5,6 +5,8 @@ import { ChevronDown, Globe } from "lucide-react";
 import type { ModelCardStatus } from "@/components/onboarding";
 import { ModelCard } from "@/components/onboarding";
 import { useModelStore } from "@/stores/modelStore";
+import { useSettings } from "@/hooks/useSettings";
+import { isOpenAiTranscriptionActive } from "@/lib/transcriptionRoute";
 import { LANGUAGES } from "@/lib/constants/languages.ts";
 import type { ModelInfo } from "@/bindings";
 import { TranscriptionProviderSettings } from "../TranscriptionProviderSettings";
@@ -22,6 +24,8 @@ export const ModelsSettings: React.FC = () => {
   const [languageSearch, setLanguageSearch] = useState("");
   const languageDropdownRef = useRef<HTMLDivElement>(null);
   const languageSearchInputRef = useRef<HTMLInputElement>(null);
+  const { settings, refreshSettings } = useSettings();
+  const isOpenAiActive = isOpenAiTranscriptionActive(settings);
   const {
     models,
     currentModel,
@@ -89,7 +93,7 @@ export const ModelsSettings: React.FC = () => {
     if (switchingModelId === modelId) {
       return "switching";
     }
-    if (modelId === currentModel) {
+    if (!isOpenAiActive && modelId === currentModel) {
       return "active";
     }
     const model = models.find((m: ModelInfo) => m.id === modelId);
@@ -112,7 +116,10 @@ export const ModelsSettings: React.FC = () => {
   const handleModelSelect = async (modelId: string) => {
     setSwitchingModelId(modelId);
     try {
-      await selectModel(modelId);
+      const success = await selectModel(modelId);
+      if (success) {
+        await refreshSettings();
+      }
     } finally {
       setSwitchingModelId(null);
     }
@@ -125,7 +132,7 @@ export const ModelsSettings: React.FC = () => {
   const handleModelDelete = async (modelId: string) => {
     const model = models.find((m: ModelInfo) => m.id === modelId);
     const modelName = model?.name || modelId;
-    const isActive = modelId === currentModel;
+    const isActive = !isOpenAiActive && modelId === currentModel;
 
     const confirmed = await ask(
       isActive
@@ -184,8 +191,8 @@ export const ModelsSettings: React.FC = () => {
 
     // Sort: active model first, then non-custom, then custom at the bottom
     downloaded.sort((a, b) => {
-      if (a.id === currentModel) return -1;
-      if (b.id === currentModel) return 1;
+      if (!isOpenAiActive && a.id === currentModel) return -1;
+      if (!isOpenAiActive && b.id === currentModel) return 1;
       if (a.is_custom !== b.is_custom) return a.is_custom ? 1 : -1;
       return 0;
     });
@@ -194,7 +201,13 @@ export const ModelsSettings: React.FC = () => {
       downloadedModels: downloaded,
       availableModels: available,
     };
-  }, [filteredModels, downloadingModels, extractingModels, currentModel]);
+  }, [
+    filteredModels,
+    downloadingModels,
+    extractingModels,
+    currentModel,
+    isOpenAiActive,
+  ]);
 
   if (loading) {
     return (

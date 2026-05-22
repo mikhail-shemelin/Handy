@@ -175,7 +175,10 @@ fn supports_logprobs(model: &str) -> bool {
 }
 
 fn supports_chunking_strategy(model: &str) -> bool {
-    matches!(model, "gpt-4o-transcribe" | "gpt-4o-mini-transcribe")
+    matches!(
+        model,
+        "gpt-4o-transcribe" | "gpt-4o-mini-transcribe" | "gpt-4o-transcribe-diarize"
+    )
 }
 
 fn is_loopback_url(url: &Url) -> bool {
@@ -279,6 +282,7 @@ mod tests {
     fn enables_auto_chunking_for_gpt_transcription_models_only() {
         assert!(supports_chunking_strategy("gpt-4o-transcribe"));
         assert!(supports_chunking_strategy("gpt-4o-mini-transcribe"));
+        assert!(supports_chunking_strategy("gpt-4o-transcribe-diarize"));
         assert!(!supports_chunking_strategy("whisper-1"));
     }
 }

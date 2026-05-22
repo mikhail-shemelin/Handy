@@ -23,7 +23,9 @@ const OPENAI_MODELS: ModelOption[] = [
 ];
 
 const supportsOpenAiChunking = (model: string) =>
-  model === "gpt-4o-transcribe" || model === "gpt-4o-mini-transcribe";
+  model === "gpt-4o-transcribe" ||
+  model === "gpt-4o-mini-transcribe" ||
+  model === "gpt-4o-transcribe-diarize";
 
 export const TranscriptionProviderSettings: React.FC = () => {
   const { t } = useTranslation();

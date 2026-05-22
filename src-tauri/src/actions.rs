@@ -530,6 +530,11 @@ impl ShortcutAction for TranscribeAction {
 
                 if samples.is_empty() {
                     debug!("Recording produced no audio samples; skipping persistence");
+                    let tm_for_unload = Arc::clone(&tm);
+                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                        tm_for_unload.maybe_unload_immediately_after_loading("empty recording");
+                    })
+                    .await;
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
                 } else {

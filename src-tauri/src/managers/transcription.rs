@@ -244,11 +244,87 @@ impl TranscriptionManager {
         if settings.model_unload_timeout == ModelUnloadTimeout::Immediately
             && self.is_model_loaded()
         {
-            info!("Immediately unloading model after {}", context);
-            if let Err(e) = self.unload_model() {
-                warn!("Failed to immediately unload model: {}", e);
-            }
+            self.unload_loaded_model(context);
         }
+    }
+
+    pub fn maybe_unload_immediately_after_loading(&self, context: &str) {
+        let settings = get_settings(&self.app_handle);
+        if settings.model_unload_timeout != ModelUnloadTimeout::Immediately {
+            return;
+        }
+
+        let mut is_loading = self.is_loading.lock().unwrap();
+        while *is_loading {
+            is_loading = self.loading_condvar.wait(is_loading).unwrap();
+        }
+        drop(is_loading);
+
+        self.maybe_unload_immediately(context);
+    }
+
+    pub fn maybe_unload_immediately_for_openai_route(&self, context: &str) {
+        let settings = get_settings(&self.app_handle);
+        if settings.model_unload_timeout != ModelUnloadTimeout::Immediately {
+            return;
+        }
+        if !settings.uses_openai_transcription() {
+            return;
+        }
+
+        if self.unload_loaded_model(context) {
+            return;
+        }
+
+        let is_loading = *self.is_loading.lock().unwrap();
+        if !is_loading {
+            self.unload_loaded_model(context);
+            return;
+        }
+
+        let manager = self.clone();
+        let context = context.to_string();
+        thread::spawn(move || {
+            let mut is_loading = manager.is_loading.lock().unwrap();
+            while *is_loading {
+                is_loading = manager.loading_condvar.wait(is_loading).unwrap();
+            }
+            drop(is_loading);
+
+            let settings = get_settings(&manager.app_handle);
+            if settings.model_unload_timeout != ModelUnloadTimeout::Immediately {
+                return;
+            }
+            if !settings.uses_openai_transcription() {
+                return;
+            }
+
+            let is_recording = manager
+                .app_handle
+                .try_state::<Arc<AudioRecordingManager>>()
+                .map_or(false, |audio_manager| audio_manager.is_recording());
+            if is_recording {
+                debug!(
+                    "Skipping immediate unload after {} because recording is active",
+                    context
+                );
+                return;
+            }
+
+            manager.unload_loaded_model(&context);
+        });
+    }
+
+    fn unload_loaded_model(&self, context: &str) -> bool {
+        if !self.is_model_loaded() {
+            return false;
+        }
+
+        info!("Immediately unloading model after {}", context);
+        if let Err(e) = self.unload_model() {
+            warn!("Failed to immediately unload model: {}", e);
+        }
+        true
     }
 
     pub fn load_model(&self, model_id: &str) -> Result<()> {
@@ -469,6 +545,7 @@ impl TranscriptionManager {
 
         if audio.is_empty() {
             debug!("Empty audio vector");
+            self.maybe_unload_immediately_for_openai_route("empty audio");
             return Ok(String::new());
         }
 
@@ -504,6 +581,7 @@ impl TranscriptionManager {
                     translate_to_english,
                     error
                 );
+                self.maybe_unload_immediately_for_openai_route("OpenAI transcription failure");
                 return Err(error);
             }
         };
@@ -529,6 +607,8 @@ impl TranscriptionManager {
         } else {
             info!("Transcription result: {}", filtered_result);
         }
+
+        self.maybe_unload_immediately_for_openai_route("OpenAI transcription");
 
         Ok(filtered_result)
     }

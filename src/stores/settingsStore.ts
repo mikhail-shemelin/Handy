@@ -6,6 +6,8 @@ import type {
   AudioDevice,
   WhisperAcceleratorSetting,
   OrtAcceleratorSetting,
+  TranscriptionProvider,
+  Result,
 } from "@/bindings";
 import { commands } from "@/bindings";
 
@@ -73,6 +75,44 @@ const DEFAULT_AUDIO_DEVICE: AudioDevice = {
   is_default: true,
 };
 
+const unwrapCommandResult = async <T, E>(
+  promise: Promise<Result<T, E>>,
+): Promise<T> => {
+  const result = await promise;
+  if (result.status === "error") {
+    throw new Error(String(result.error));
+  }
+  return result.data;
+};
+
+const normalizeOptimisticSettingUpdate = <K extends keyof Settings>(
+  settings: Settings,
+  key: K,
+  value: Settings[K],
+): Settings => {
+  const updatedSettings = { ...settings, [key]: value };
+
+  if (
+    key !== "openai_transcription_enabled" ||
+    settings.transcription_provider !== "openai"
+  ) {
+    return updatedSettings;
+  }
+
+  const enabled = value as boolean;
+  const enablingFromDisabled =
+    enabled && settings.openai_transcription_enabled !== true;
+
+  if (!enabled || enablingFromDisabled) {
+    return {
+      ...updatedSettings,
+      transcription_provider: "local",
+    };
+  }
+
+  return updatedSettings;
+};
+
 const settingUpdaters: {
   [K in keyof Settings]?: (value: Settings[K]) => Promise<unknown>;
 } = {
@@ -88,6 +128,34 @@ const settingUpdaters: {
     commands.changeAutostartSetting(value as boolean),
   update_checks_enabled: (value) =>
     commands.changeUpdateChecksSetting(value as boolean),
+  transcription_provider: (value) =>
+    unwrapCommandResult(
+      commands.changeTranscriptionProviderSetting(
+        value as TranscriptionProvider,
+      ),
+    ),
+  openai_transcription_enabled: (value) =>
+    unwrapCommandResult(
+      commands.changeOpenaiTranscriptionEnabledSetting(value as boolean),
+    ),
+  openai_transcription_base_url: (value) =>
+    unwrapCommandResult(
+      commands.changeOpenaiTranscriptionBaseUrlSetting(value as string),
+    ),
+  openai_transcription_model: (value) =>
+    unwrapCommandResult(
+      commands.changeOpenaiTranscriptionModelSetting(value as string),
+    ),
+  openai_transcription_prompt: (value) =>
+    unwrapCommandResult(
+      commands.changeOpenaiTranscriptionPromptSetting(value as string),
+    ),
+  openai_transcription_chunking_enabled: (value) =>
+    unwrapCommandResult(
+      commands.changeOpenaiTranscriptionChunkingEnabledSetting(
+        value as boolean,
+      ),
+    ),
   push_to_talk: (value) => commands.changePttSetting(value as boolean),
   selected_microphone: (value) =>
     commands.setSelectedMicrophone(
@@ -282,12 +350,15 @@ export const useSettingsStore = create<SettingsStore>()(
 
       try {
         set((state) => ({
-          settings: state.settings ? { ...state.settings, [key]: value } : null,
+          settings: state.settings
+            ? normalizeOptimisticSettingUpdate(state.settings, key, value)
+            : null,
         }));
 
         const updater = settingUpdaters[key];
         if (updater) {
           await updater(value);
+          await get().refreshSettings();
         } else if (key !== "bindings" && key !== "selected_model") {
           console.warn(`No handler for setting: ${String(key)}`);
         }

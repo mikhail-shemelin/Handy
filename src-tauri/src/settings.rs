@@ -9,6 +9,10 @@ use tauri_plugin_store::StoreExt;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
+pub const OPENAI_TRANSCRIPTION_PROVIDER_ID: &str = "openai";
+pub const OPENAI_TRANSCRIPTION_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+pub const OPENAI_TRANSCRIPTION_DEFAULT_MODEL: &str = "gpt-4o-transcribe";
+const REDACTED_SECRET_PLACEHOLDER: &str = "[REDACTED]";
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "lowercase")]
@@ -104,6 +108,19 @@ pub struct PostProcessProvider {
     pub models_endpoint: Option<String>,
     #[serde(default)]
     pub supports_structured_output: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscriptionProvider {
+    Local,
+    Openai,
+}
+
+impl Default for TranscriptionProvider {
+    fn default() -> Self {
+        TranscriptionProvider::Local
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
@@ -351,6 +368,20 @@ pub struct AppSettings {
     pub update_checks_enabled: bool,
     #[serde(default = "default_model")]
     pub selected_model: String,
+    #[serde(default)]
+    pub transcription_provider: TranscriptionProvider,
+    #[serde(default)]
+    pub openai_transcription_enabled: bool,
+    #[serde(default = "default_openai_transcription_base_url")]
+    pub openai_transcription_base_url: String,
+    #[serde(default = "default_openai_transcription_model")]
+    pub openai_transcription_model: String,
+    #[serde(default)]
+    pub openai_transcription_prompt: String,
+    #[serde(default)]
+    pub openai_transcription_chunking_enabled: bool,
+    #[serde(default = "default_openai_transcription_api_keys")]
+    pub openai_transcription_api_keys: SecretMap,
     #[serde(default = "default_always_on_microphone")]
     pub always_on_microphone: bool,
     #[serde(default)]
@@ -434,6 +465,20 @@ pub struct AppSettings {
 
 fn default_model() -> String {
     "".to_string()
+}
+
+fn default_openai_transcription_base_url() -> String {
+    OPENAI_TRANSCRIPTION_DEFAULT_BASE_URL.to_string()
+}
+
+fn default_openai_transcription_model() -> String {
+    OPENAI_TRANSCRIPTION_DEFAULT_MODEL.to_string()
+}
+
+fn default_openai_transcription_api_keys() -> SecretMap {
+    let mut map = HashMap::new();
+    map.insert(OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(), String::new());
+    SecretMap(map)
 }
 
 fn default_always_on_microphone() -> bool {
@@ -710,6 +755,25 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
     changed
 }
 
+fn ensure_transcription_route_defaults(
+    settings: &mut AppSettings,
+    openai_enabled_field_missing: bool,
+) -> bool {
+    if openai_enabled_field_missing
+        && settings.transcription_provider == TranscriptionProvider::Openai
+        && !settings.openai_transcription_enabled
+    {
+        settings.openai_transcription_enabled = true;
+        return true;
+    }
+
+    false
+}
+
+fn is_openai_enabled_field_missing(settings_value: &serde_json::Value) -> bool {
+    settings_value.get("openai_transcription_enabled").is_none()
+}
+
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
 
 pub fn get_default_settings() -> AppSettings {
@@ -774,6 +838,13 @@ pub fn get_default_settings() -> AppSettings {
         autostart_enabled: default_autostart_enabled(),
         update_checks_enabled: default_update_checks_enabled(),
         selected_model: "".to_string(),
+        transcription_provider: TranscriptionProvider::Local,
+        openai_transcription_enabled: false,
+        openai_transcription_base_url: default_openai_transcription_base_url(),
+        openai_transcription_model: default_openai_transcription_model(),
+        openai_transcription_prompt: String::new(),
+        openai_transcription_chunking_enabled: false,
+        openai_transcription_api_keys: default_openai_transcription_api_keys(),
         always_on_microphone: false,
         selected_microphone: None,
         clamshell_microphone: None,
@@ -818,6 +889,48 @@ pub fn get_default_settings() -> AppSettings {
 }
 
 impl AppSettings {
+    pub fn without_openai_transcription_secret(mut self) -> Self {
+        for value in self.openai_transcription_api_keys.values_mut() {
+            if !value.is_empty() {
+                *value = REDACTED_SECRET_PLACEHOLDER.to_string();
+            }
+        }
+        self
+    }
+
+    pub fn uses_openai_transcription(&self) -> bool {
+        self.openai_transcription_enabled
+            && self.transcription_provider == TranscriptionProvider::Openai
+    }
+
+    pub fn has_configured_openai_transcription(&self) -> bool {
+        self.openai_transcription_enabled
+            && !self.openai_transcription_api_key().trim().is_empty()
+            && crate::openai_transcription::normalize_base_url(&self.openai_transcription_base_url)
+                .is_ok()
+            && !self.openai_transcription_model.trim().is_empty()
+    }
+
+    pub fn set_openai_transcription_enabled(&mut self, enabled: bool) {
+        let was_enabled = self.openai_transcription_enabled;
+        self.openai_transcription_enabled = enabled;
+
+        if !enabled && self.transcription_provider == TranscriptionProvider::Openai {
+            self.transcription_provider = TranscriptionProvider::Local;
+        }
+
+        if enabled && !was_enabled && self.transcription_provider == TranscriptionProvider::Openai {
+            self.transcription_provider = TranscriptionProvider::Local;
+        }
+    }
+
+    pub fn openai_transcription_api_key(&self) -> String {
+        self.openai_transcription_api_keys
+            .get(OPENAI_TRANSCRIPTION_PROVIDER_ID)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub fn active_post_process_provider(&self) -> Option<&PostProcessProvider> {
         self.post_process_providers
             .iter()
@@ -846,45 +959,50 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         .store(crate::portable::store_path(SETTINGS_STORE_PATH))
         .expect("Failed to initialize store");
 
-    let mut settings = if let Some(settings_value) = store.get("settings") {
-        // Parse the entire settings object
-        match serde_json::from_value::<AppSettings>(settings_value) {
-            Ok(mut settings) => {
-                debug!("Found existing settings: {:?}", settings);
-                let default_settings = get_default_settings();
-                let mut updated = false;
+    let (mut settings, openai_enabled_field_missing) =
+        if let Some(settings_value) = store.get("settings") {
+            let openai_enabled_field_missing = is_openai_enabled_field_missing(&settings_value);
+            // Parse the entire settings object
+            match serde_json::from_value::<AppSettings>(settings_value) {
+                Ok(mut settings) => {
+                    debug!("Found existing settings: {:?}", settings);
+                    let default_settings = get_default_settings();
+                    let mut updated = false;
 
-                // Merge default bindings into existing settings
-                for (key, value) in default_settings.bindings {
-                    if !settings.bindings.contains_key(&key) {
-                        debug!("Adding missing binding: {}", key);
-                        settings.bindings.insert(key, value);
-                        updated = true;
+                    // Merge default bindings into existing settings
+                    for (key, value) in default_settings.bindings {
+                        if !settings.bindings.contains_key(&key) {
+                            debug!("Adding missing binding: {}", key);
+                            settings.bindings.insert(key, value);
+                            updated = true;
+                        }
                     }
+
+                    if updated {
+                        debug!("Settings updated with new bindings");
+                        store.set("settings", serde_json::to_value(&settings).unwrap());
+                    }
+
+                    (settings, openai_enabled_field_missing)
                 }
-
-                if updated {
-                    debug!("Settings updated with new bindings");
-                    store.set("settings", serde_json::to_value(&settings).unwrap());
+                Err(e) => {
+                    warn!("Failed to parse settings: {}", e);
+                    // Fall back to default settings if parsing fails
+                    let default_settings = get_default_settings();
+                    store.set("settings", serde_json::to_value(&default_settings).unwrap());
+                    (default_settings, false)
                 }
-
-                settings
             }
-            Err(e) => {
-                warn!("Failed to parse settings: {}", e);
-                // Fall back to default settings if parsing fails
-                let default_settings = get_default_settings();
-                store.set("settings", serde_json::to_value(&default_settings).unwrap());
-                default_settings
-            }
-        }
-    } else {
-        let default_settings = get_default_settings();
-        store.set("settings", serde_json::to_value(&default_settings).unwrap());
-        default_settings
-    };
+        } else {
+            let default_settings = get_default_settings();
+            store.set("settings", serde_json::to_value(&default_settings).unwrap());
+            (default_settings, false)
+        };
 
-    if ensure_post_process_defaults(&mut settings) {
+    let post_process_defaults_changed = ensure_post_process_defaults(&mut settings);
+    let transcription_route_defaults_changed =
+        ensure_transcription_route_defaults(&mut settings, openai_enabled_field_missing);
+    if post_process_defaults_changed || transcription_route_defaults_changed {
         store.set("settings", serde_json::to_value(&settings).unwrap());
     }
 
@@ -896,19 +1014,26 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
         .store(crate::portable::store_path(SETTINGS_STORE_PATH))
         .expect("Failed to initialize store");
 
-    let mut settings = if let Some(settings_value) = store.get("settings") {
-        serde_json::from_value::<AppSettings>(settings_value).unwrap_or_else(|_| {
+    let (mut settings, openai_enabled_field_missing) =
+        if let Some(settings_value) = store.get("settings") {
+            let openai_enabled_field_missing = is_openai_enabled_field_missing(&settings_value);
+            serde_json::from_value::<AppSettings>(settings_value)
+                .map(|settings| (settings, openai_enabled_field_missing))
+                .unwrap_or_else(|_| {
+                    let default_settings = get_default_settings();
+                    store.set("settings", serde_json::to_value(&default_settings).unwrap());
+                    (default_settings, false)
+                })
+        } else {
             let default_settings = get_default_settings();
             store.set("settings", serde_json::to_value(&default_settings).unwrap());
-            default_settings
-        })
-    } else {
-        let default_settings = get_default_settings();
-        store.set("settings", serde_json::to_value(&default_settings).unwrap());
-        default_settings
-    };
+            (default_settings, false)
+        };
 
-    if ensure_post_process_defaults(&mut settings) {
+    let post_process_defaults_changed = ensure_post_process_defaults(&mut settings);
+    let transcription_route_defaults_changed =
+        ensure_transcription_route_defaults(&mut settings, openai_enabled_field_missing);
+    if post_process_defaults_changed || transcription_route_defaults_changed {
         store.set("settings", serde_json::to_value(&settings).unwrap());
     }
 
@@ -959,6 +1084,155 @@ mod tests {
     }
 
     #[test]
+    fn default_settings_use_local_transcription() {
+        let settings = get_default_settings();
+        assert_eq!(
+            settings.transcription_provider,
+            TranscriptionProvider::Local
+        );
+        assert!(!settings.openai_transcription_enabled);
+        assert_eq!(
+            settings.openai_transcription_base_url,
+            OPENAI_TRANSCRIPTION_DEFAULT_BASE_URL
+        );
+        assert_eq!(
+            settings.openai_transcription_model,
+            OPENAI_TRANSCRIPTION_DEFAULT_MODEL
+        );
+        assert!(!settings.openai_transcription_chunking_enabled);
+        assert_eq!(
+            settings
+                .openai_transcription_api_keys
+                .get(OPENAI_TRANSCRIPTION_PROVIDER_ID)
+                .map(String::as_str),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn openai_transcription_usage_requires_enabled_provider() {
+        let mut settings = get_default_settings();
+        settings.transcription_provider = TranscriptionProvider::Openai;
+        assert!(!settings.uses_openai_transcription());
+
+        settings.openai_transcription_enabled = true;
+        assert!(settings.uses_openai_transcription());
+
+        settings.transcription_provider = TranscriptionProvider::Local;
+        assert!(!settings.uses_openai_transcription());
+    }
+
+    #[test]
+    fn configured_openai_transcription_availability_does_not_require_active_route() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_enabled = true;
+        settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-test".to_string(),
+        );
+
+        assert!(settings.has_configured_openai_transcription());
+        assert!(!settings.uses_openai_transcription());
+    }
+
+    #[test]
+    fn configured_openai_transcription_availability_requires_complete_config() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_enabled = true;
+
+        assert!(!settings.has_configured_openai_transcription());
+
+        settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-test".to_string(),
+        );
+        settings.openai_transcription_base_url.clear();
+
+        assert!(!settings.has_configured_openai_transcription());
+    }
+
+    #[test]
+    fn configured_openai_transcription_availability_rejects_invalid_endpoint() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_enabled = true;
+        settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-test".to_string(),
+        );
+        settings.openai_transcription_base_url = "http://example.com".to_string();
+
+        assert!(!settings.has_configured_openai_transcription());
+    }
+
+    #[test]
+    fn migration_preserves_legacy_openai_route_when_enable_field_is_missing() {
+        let mut settings = get_default_settings();
+        settings.transcription_provider = TranscriptionProvider::Openai;
+
+        assert!(ensure_transcription_route_defaults(&mut settings, true));
+        assert!(settings.openai_transcription_enabled);
+        assert!(settings.uses_openai_transcription());
+    }
+
+    #[test]
+    fn migration_does_not_enable_explicitly_disabled_openai_route() {
+        let mut settings = get_default_settings();
+        settings.transcription_provider = TranscriptionProvider::Openai;
+        settings.openai_transcription_enabled = false;
+
+        assert!(!ensure_transcription_route_defaults(&mut settings, false));
+        assert!(!settings.openai_transcription_enabled);
+        assert!(!settings.uses_openai_transcription());
+    }
+
+    #[test]
+    fn disabling_openai_transcription_resets_active_route_to_local() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_enabled = true;
+        settings.transcription_provider = TranscriptionProvider::Openai;
+
+        settings.set_openai_transcription_enabled(false);
+
+        assert!(!settings.openai_transcription_enabled);
+        assert_eq!(
+            settings.transcription_provider,
+            TranscriptionProvider::Local
+        );
+    }
+
+    #[test]
+    fn enabling_openai_transcription_does_not_preserve_stale_openai_route() {
+        let mut settings = get_default_settings();
+        settings.transcription_provider = TranscriptionProvider::Openai;
+        settings.openai_transcription_enabled = false;
+
+        settings.set_openai_transcription_enabled(true);
+
+        assert!(settings.openai_transcription_enabled);
+        assert_eq!(
+            settings.transcription_provider,
+            TranscriptionProvider::Local
+        );
+        assert!(!settings.uses_openai_transcription());
+    }
+
+    #[test]
+    fn enabling_openai_transcription_is_idempotent_for_active_openai_route() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_enabled = true;
+        settings.transcription_provider = TranscriptionProvider::Openai;
+
+        settings.set_openai_transcription_enabled(true);
+
+        assert!(settings.openai_transcription_enabled);
+        assert_eq!(
+            settings.transcription_provider,
+            TranscriptionProvider::Openai
+        );
+        assert!(settings.uses_openai_transcription());
+    }
+
+    #[test]
     fn debug_output_redacts_api_keys() {
         let mut settings = get_default_settings();
         settings
@@ -971,12 +1245,36 @@ mod tests {
         settings
             .post_process_api_keys
             .insert("empty_provider".to_string(), "".to_string());
+        settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-proj-transcription-secret".to_string(),
+        );
 
         let debug_output = format!("{:?}", settings);
 
         assert!(!debug_output.contains("sk-proj-secret-key-12345"));
         assert!(!debug_output.contains("sk-ant-secret-key-67890"));
+        assert!(!debug_output.contains("sk-proj-transcription-secret"));
         assert!(debug_output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn frontend_settings_redact_openai_transcription_api_key() {
+        let mut settings = get_default_settings();
+        settings.openai_transcription_api_keys.insert(
+            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
+            "sk-proj-transcription-secret".to_string(),
+        );
+
+        let frontend_settings = settings.without_openai_transcription_secret();
+
+        assert_eq!(
+            frontend_settings
+                .openai_transcription_api_keys
+                .get(OPENAI_TRANSCRIPTION_PROVIDER_ID)
+                .map(String::as_str),
+            Some(REDACTED_SECRET_PLACEHOLDER)
+        );
     }
 
     #[test]

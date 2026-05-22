@@ -148,7 +148,13 @@
       "languageOnly": "{{language}} 전용",
       "translation": "영어로 번역 가능",
       "translate": "영어로 번역"
-    }
+    },
+    "openaiCloudDescription": "Cloud transcription",
+    "openaiDisabled": "Enable OpenAI transcription in Models settings",
+    "openaiMissingApiKey": "Add an OpenAI API key in Models settings",
+    "openaiMissingEndpoint": "Add an OpenAI endpoint in Models settings",
+    "openaiMissingModel": "Choose an OpenAI transcription model",
+    "openaiConfigurationRequired": "{{provider}} setup required"
   },
   "settings": {
     "modelSettings": {
@@ -535,6 +541,47 @@
           "title": "Whisper.cpp",
           "description": "OpenAI의 Whisper 자동 음성 인식 모델의 고성능 추론",
           "details": "Handy는 빠르고 로컬 음성-텍스트 처리를 위해 Whisper.cpp를 사용합니다. Georgi Gerganov와 기여자들의 놀라운 작업에 감사드립니다."
+        }
+      }
+    },
+    "transcription": {
+      "title": "Transcription",
+      "provider": {
+        "title": "Provider",
+        "description": "Choose whether speech is transcribed locally or with OpenAI.",
+        "options": {
+          "local": "Local Models",
+          "openai": "OpenAI"
+        }
+      },
+      "openai": {
+        "endpoint": {
+          "title": "Endpoint",
+          "description": "OpenAI API base URL for transcription requests.",
+          "placeholder": "https://api.openai.com/v1"
+        },
+        "apiKey": {
+          "title": "API Key",
+          "description": "OpenAI API key used only for transcription requests.",
+          "placeholder": "sk-..."
+        },
+        "model": {
+          "title": "Model",
+          "description": "Choose the OpenAI speech-to-text model."
+        },
+        "prompt": {
+          "title": "Prompt",
+          "description": "Optional context sent with OpenAI transcription requests.",
+          "placeholder": "Optional transcription context"
+        },
+        "enabled": {
+          "title": "Enable OpenAI transcription",
+          "description": "Show OpenAI as a selectable transcription option in the model selector.",
+          "disableBlocked": "Download a local model before disabling OpenAI transcription."
+        },
+        "chunking": {
+          "title": "Automatic chunking",
+          "description": "Use OpenAI server-side chunking for supported GPT transcription models."
         }
       }
     }

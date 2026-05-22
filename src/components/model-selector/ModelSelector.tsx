@@ -1,9 +1,15 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
-import { commands } from "@/bindings";
+import { commands, type TranscriptionProvider } from "@/bindings";
 import { getTranslatedModelName } from "../../lib/utils/modelTranslation";
 import { useModelStore } from "../../stores/modelStore";
+import { useSettings } from "@/hooks/useSettings";
+import {
+  getOpenAiTranscriptionAvailability,
+  getOpenAiTranscriptionModel,
+  isOpenAiTranscriptionActive,
+} from "@/lib/transcriptionRoute";
 import ModelStatusButton from "./ModelStatusButton";
 import ModelDropdown from "./ModelDropdown";
 import DownloadProgressDisplay from "./DownloadProgressDisplay";
@@ -35,6 +41,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
     extractingModels,
     selectModel,
   } = useModelStore();
+  const { settings, refreshSettings } = useSettings();
 
   const [modelStatus, setModelStatus] = useState<ModelStatus>("unloaded");
   const [modelError, setModelError] = useState<string | null>(null);
@@ -45,10 +52,19 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const displayModelId = pendingModelId || currentModel;
+  const isOpenAiActive = isOpenAiTranscriptionActive(settings);
+  const openAiAvailability = getOpenAiTranscriptionAvailability(settings);
+  const openAiLabel = `${t("settings.transcription.provider.options.openai")} · ${getOpenAiTranscriptionModel(settings)}`;
 
   // Check model status when currentModel changes
   useEffect(() => {
     const checkStatus = async () => {
+      if (isOpenAiActive) {
+        setModelStatus(openAiAvailability.configured ? "ready" : "error");
+        setModelError(null);
+        return;
+      }
+
       if (currentModel) {
         try {
           const statusResult = await commands.getTranscriptionModelStatus();
@@ -66,7 +82,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
       }
     };
     checkStatus();
-  }, [currentModel]);
+  }, [currentModel, isOpenAiActive, openAiAvailability.configured]);
 
   useEffect(() => {
     // Listen for model loading lifecycle events
@@ -109,10 +125,20 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
               setPendingModelId(modelId);
               setModelError(null);
               setShowModelDropdown(false);
-              const success = await selectModel(modelId);
-              if (!success) {
-                setPendingModelId(null);
+              const result =
+                await commands.autoSelectLocalModelIfActiveRouteIsLocal(
+                  modelId,
+                );
+              if (result.status === "error") {
+                throw new Error(String(result.error));
               }
+
+              if (!result.data) {
+                setPendingModelId(null);
+                return;
+              }
+              useModelStore.getState().setCurrentModel(modelId);
+              await refreshSettings();
             }
           } catch {
             // Ignore errors in auto-select
@@ -138,7 +164,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
       modelStateUnlisten.then((fn) => fn());
       downloadCompleteUnlisten.then((fn) => fn());
     };
-  }, [selectModel]);
+  }, [isOpenAiActive, refreshSettings, selectModel]);
 
   const handleModelSelect = async (modelId: string) => {
     setPendingModelId(modelId);
@@ -150,10 +176,59 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
       setModelStatus("error");
       setModelError("Failed to switch model");
       onError?.("Failed to switch model");
+      return;
+    }
+
+    if (isOpenAiActive) {
+      const result = await commands.changeTranscriptionProviderSetting(
+        "local" as TranscriptionProvider,
+      );
+      if (result.status === "error") {
+        setModelStatus("error");
+        setModelError(String(result.error));
+        onError?.(String(result.error));
+      }
+      await refreshSettings();
     }
   };
 
+  const handleOpenAiSelect = async () => {
+    if (!openAiAvailability.configured) {
+      const reason = openAiAvailability.missingReasonKey
+        ? t(openAiAvailability.missingReasonKey)
+        : t("modelSelector.modelError");
+      setModelStatus("error");
+      setModelError(reason);
+      onError?.(reason);
+      return;
+    }
+
+    setPendingModelId(null);
+    setModelError(null);
+    setShowModelDropdown(false);
+    const result = await commands.changeTranscriptionProviderSetting(
+      "openai" as TranscriptionProvider,
+    );
+    if (result.status === "error") {
+      const error = String(result.error);
+      setModelStatus("error");
+      setModelError(error);
+      onError?.(error);
+    }
+    await refreshSettings();
+  };
+
   const getModelDisplayText = (): string => {
+    if (isOpenAiActive) {
+      if (!openAiAvailability.configured) {
+        return t("modelSelector.openaiConfigurationRequired", {
+          provider: t("settings.transcription.provider.options.openai"),
+        });
+      }
+
+      return openAiLabel;
+    }
+
     const verifyingKeys = Object.keys(verifyingModels);
     if (verifyingKeys.length > 0) {
       if (verifyingKeys.length === 1) {
@@ -163,9 +238,9 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
           ? getTranslatedModelName(model, t)
           : t("modelSelector.verifyingGeneric").replace("...", "");
         return t("modelSelector.verifying", { modelName });
-      } else {
-        return t("modelSelector.verifyingGeneric");
       }
+
+      return t("modelSelector.verifyingGeneric");
     }
 
     const extractingKeys = Object.keys(extractingModels);
@@ -177,11 +252,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
           ? getTranslatedModelName(model, t)
           : t("modelSelector.extractingGeneric").replace("...", "");
         return t("modelSelector.extracting", { modelName });
-      } else {
-        return t("modelSelector.extractingMultiple", {
-          count: extractingKeys.length,
-        });
       }
+
+      return t("modelSelector.extractingMultiple", {
+        count: extractingKeys.length,
+      });
     }
 
     const progressValues = Object.values(downloadProgress);
@@ -193,11 +268,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
           Math.min(100, Math.round(progress.percentage)),
         );
         return t("modelSelector.downloading", { percentage });
-      } else {
-        return t("modelSelector.downloadingMultiple", {
-          count: progressValues.length,
-        });
       }
+
+      return t("modelSelector.downloadingMultiple", {
+        count: progressValues.length,
+      });
     }
 
     const currentModelInfo = models.find((m) => m.id === displayModelId);
@@ -236,6 +311,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
 
   // Derive display status from model status + store state
   const getDisplayStatus = (): ModelStatus => {
+    if (isOpenAiActive) {
+      return openAiAvailability.configured ? "ready" : "error";
+    }
+
     if (Object.keys(verifyingModels).length > 0) return "verifying";
     if (Object.keys(extractingModels).length > 0) return "extracting";
     if (Object.keys(downloadProgress).length > 0) return "downloading";
@@ -258,7 +337,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
           <ModelDropdown
             models={models}
             currentModelId={displayModelId}
+            activeRoute={isOpenAiActive ? "openai" : "local"}
+            openAiOption={
+              openAiAvailability.enabled
+                ? {
+                    label: openAiLabel,
+                    availability: openAiAvailability,
+                  }
+                : null
+            }
             onModelSelect={handleModelSelect}
+            onOpenAiSelect={handleOpenAiSelect}
           />
         )}
       </div>

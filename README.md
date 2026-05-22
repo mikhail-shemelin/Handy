@@ -2,9 +2,9 @@
 
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com/invite/WVBeWsNXK4)
 
-**A free, open source, and extensible speech-to-text application that works completely offline.**
+**A free, open source, and extensible speech-to-text application that works offline by default.**
 
-Handy is a cross-platform desktop application that provides simple, privacy-focused speech transcription. Press a shortcut, speak, and have your words appear in any text field. This happens on your own computer without sending any information to the cloud.
+Handy is a cross-platform desktop application that provides simple, privacy-focused speech transcription. Press a shortcut, speak, and have your words appear in any text field. By default this happens on your own computer without sending any information to the cloud.
 
 ## Why Handy?
 
@@ -12,7 +12,7 @@ Handy was created to fill the gap for a truly open source, extensible speech-to-
 
 - **Free**: Accessibility tooling belongs in everyone's hands, not behind a paywall
 - **Open Source**: Together we can build further. Extend Handy for yourself and contribute to something bigger
-- **Private**: Your voice stays on your computer. Get transcriptions without sending audio to the cloud
+- **Private**: Your voice stays on your computer by default. Get local transcriptions without sending audio to the cloud
 - **Simple**: One tool, one job. Transcribe what you say and put it into a text box
 
 Handy isn't trying to be the best speech-to-text app—it's trying to be the most forkable one.
@@ -24,12 +24,13 @@ Handy isn't trying to be the best speech-to-text app—it's trying to be the mos
 3. **Release** and Handy processes your speech using Whisper
 4. **Get** your transcribed text pasted directly into whatever app you're using
 
-The process is entirely local:
+The process is local by default:
 
 - Silence is filtered using VAD (Voice Activity Detection) with Silero
 - Transcription uses your choice of models:
   - **Whisper models** (Small/Medium/Turbo/Large) with GPU acceleration when available
   - **Parakeet V3** - CPU-optimized model with excellent performance and automatic language detection
+- Optional OpenAI transcription can be enabled in Settings → Models. Once enabled and configured, select the OpenAI entry in the bottom model selector to make it the active transcription route.
 - Works on Windows, macOS, and Linux
 
 ## Quick Start
@@ -392,7 +393,7 @@ Final structure should look like:
 1. Restart Handy
 2. Open Settings → Models
 3. Your manually installed models should now appear as "Downloaded"
-4. Select the model you want to use and test transcription
+4. Select the model you want to use from the bottom model selector and test transcription
 
 ### Custom Whisper Models
 

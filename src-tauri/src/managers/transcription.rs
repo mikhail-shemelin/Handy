@@ -1,6 +1,7 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{EngineType, ModelManager};
+use crate::openai_transcription::{self, OpenAiTranscriptionConfig, OpenAiTranscriptionLogprob};
 use crate::settings::{
     get_settings, ModelUnloadTimeout, OrtAcceleratorSetting, WhisperAcceleratorSetting,
 };
@@ -243,11 +244,87 @@ impl TranscriptionManager {
         if settings.model_unload_timeout == ModelUnloadTimeout::Immediately
             && self.is_model_loaded()
         {
-            info!("Immediately unloading model after {}", context);
-            if let Err(e) = self.unload_model() {
-                warn!("Failed to immediately unload model: {}", e);
-            }
+            self.unload_loaded_model(context);
         }
+    }
+
+    pub fn maybe_unload_immediately_after_loading(&self, context: &str) {
+        let settings = get_settings(&self.app_handle);
+        if settings.model_unload_timeout != ModelUnloadTimeout::Immediately {
+            return;
+        }
+
+        let mut is_loading = self.is_loading.lock().unwrap();
+        while *is_loading {
+            is_loading = self.loading_condvar.wait(is_loading).unwrap();
+        }
+        drop(is_loading);
+
+        self.maybe_unload_immediately(context);
+    }
+
+    pub fn maybe_unload_immediately_for_openai_route(&self, context: &str) {
+        let settings = get_settings(&self.app_handle);
+        if settings.model_unload_timeout != ModelUnloadTimeout::Immediately {
+            return;
+        }
+        if !settings.uses_openai_transcription() {
+            return;
+        }
+
+        if self.unload_loaded_model(context) {
+            return;
+        }
+
+        let is_loading = *self.is_loading.lock().unwrap();
+        if !is_loading {
+            self.unload_loaded_model(context);
+            return;
+        }
+
+        let manager = self.clone();
+        let context = context.to_string();
+        thread::spawn(move || {
+            let mut is_loading = manager.is_loading.lock().unwrap();
+            while *is_loading {
+                is_loading = manager.loading_condvar.wait(is_loading).unwrap();
+            }
+            drop(is_loading);
+
+            let settings = get_settings(&manager.app_handle);
+            if settings.model_unload_timeout != ModelUnloadTimeout::Immediately {
+                return;
+            }
+            if !settings.uses_openai_transcription() {
+                return;
+            }
+
+            let is_recording = manager
+                .app_handle
+                .try_state::<Arc<AudioRecordingManager>>()
+                .map_or(false, |audio_manager| audio_manager.is_recording());
+            if is_recording {
+                debug!(
+                    "Skipping immediate unload after {} because recording is active",
+                    context
+                );
+                return;
+            }
+
+            manager.unload_loaded_model(&context);
+        });
+    }
+
+    fn unload_loaded_model(&self, context: &str) -> bool {
+        if !self.is_model_loaded() {
+            return false;
+        }
+
+        info!("Immediately unloading model after {}", context);
+        if let Err(e) = self.unload_model() {
+            warn!("Failed to immediately unload model: {}", e);
+        }
+        true
     }
 
     pub fn load_model(&self, model_id: &str) -> Result<()> {
@@ -414,6 +491,11 @@ impl TranscriptionManager {
 
     /// Kicks off the model loading in a background thread if it's not already loaded
     pub fn initiate_model_load(&self) {
+        let settings = get_settings(&self.app_handle);
+        if settings.uses_openai_transcription() {
+            return;
+        }
+
         let mut is_loading = self.is_loading.lock().unwrap();
         if *is_loading || self.is_model_loaded() {
             return;
@@ -437,7 +519,101 @@ impl TranscriptionManager {
         current_model.clone()
     }
 
-    pub fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
+    pub async fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
+        let settings = get_settings(&self.app_handle);
+        if settings.uses_openai_transcription() {
+            return self.transcribe_with_openai(audio).await;
+        }
+
+        let manager = self.clone();
+        tauri::async_runtime::spawn_blocking(move || manager.transcribe_local(audio))
+            .await
+            .map_err(|e| anyhow::anyhow!("Transcription task panicked: {}", e))?
+    }
+
+    async fn transcribe_with_openai(&self, audio: Vec<f32>) -> Result<String> {
+        #[cfg(debug_assertions)]
+        if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
+            return Err(anyhow::anyhow!(
+                "Simulated transcription failure (HANDY_FORCE_TRANSCRIPTION_FAILURE)"
+            ));
+        }
+
+        self.touch_activity();
+        let st = std::time::Instant::now();
+        debug!("Audio vector length: {}", audio.len());
+
+        if audio.is_empty() {
+            debug!("Empty audio vector");
+            self.maybe_unload_immediately_for_openai_route("empty audio");
+            return Ok(String::new());
+        }
+
+        let settings = get_settings(&self.app_handle);
+        let model = settings.openai_transcription_model.clone();
+        let language = openai_transcription::normalize_language(&settings.selected_language);
+        let translate_to_english = settings.translate_to_english;
+        #[cfg(debug_assertions)]
+        let include_logprobs = true;
+        #[cfg(not(debug_assertions))]
+        let include_logprobs = false;
+        let config = OpenAiTranscriptionConfig {
+            base_url: settings.openai_transcription_base_url.clone(),
+            api_key: settings.openai_transcription_api_key(),
+            model: model.clone(),
+            language: language.clone(),
+            prompt: build_openai_transcription_prompt(
+                &settings.openai_transcription_prompt,
+                &settings.custom_words,
+            ),
+            translate_to_english,
+            include_logprobs,
+            chunking_enabled: settings.openai_transcription_chunking_enabled,
+        };
+
+        let transcription = match openai_transcription::transcribe_samples(&audio, config).await {
+            Ok(transcription) => transcription,
+            Err(error) => {
+                error!(
+                    "OpenAI transcription failed (model={}, language={}, translate={}): {}",
+                    model,
+                    language.as_deref().unwrap_or("auto"),
+                    translate_to_english,
+                    error
+                );
+                self.maybe_unload_immediately_for_openai_route("OpenAI transcription failure");
+                return Err(error);
+            }
+        };
+        if let Some(logprobs) = transcription.logprobs.as_deref() {
+            log_openai_logprob_summary(logprobs);
+        }
+        let filtered_result = filter_transcription_output(
+            &transcription.text,
+            &settings.app_language,
+            &settings.custom_filler_words,
+        );
+
+        info!(
+            "OpenAI transcription completed in {}ms (model={}, language={}, translate={})",
+            st.elapsed().as_millis(),
+            model,
+            language.as_deref().unwrap_or("auto"),
+            translate_to_english
+        );
+
+        if filtered_result.is_empty() {
+            info!("Transcription result is empty");
+        } else {
+            info!("Transcription result: {}", filtered_result);
+        }
+
+        self.maybe_unload_immediately_for_openai_route("OpenAI transcription");
+
+        Ok(filtered_result)
+    }
+
+    fn transcribe_local(&self, audio: Vec<f32>) -> Result<String> {
         #[cfg(debug_assertions)]
         if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
             return Err(anyhow::anyhow!(
@@ -730,6 +906,66 @@ impl TranscriptionManager {
         self.maybe_unload_immediately("transcription");
 
         Ok(final_result)
+    }
+}
+
+fn log_openai_logprob_summary(logprobs: &[OpenAiTranscriptionLogprob]) {
+    if logprobs.is_empty() {
+        return;
+    }
+
+    let count = logprobs.len();
+    let average = logprobs.iter().map(|entry| entry.logprob).sum::<f64>() / count as f64;
+    let min_entry = logprobs
+        .iter()
+        .min_by(|left, right| left.logprob.total_cmp(&right.logprob))
+        .expect("logprobs is not empty");
+    info!(
+        "OpenAI transcription logprobs: tokens={}, avg={:.3}, min={:.3}",
+        count, average, min_entry.logprob
+    );
+}
+
+fn build_openai_transcription_prompt(
+    custom_prompt: &str,
+    custom_words: &[String],
+) -> Option<String> {
+    let mut prompt_parts = Vec::new();
+    let custom_prompt = custom_prompt.trim();
+    if !custom_prompt.is_empty() {
+        prompt_parts.push(custom_prompt.to_string());
+    }
+    if !custom_words.is_empty() {
+        prompt_parts.push(custom_words.join(", "));
+    }
+
+    if prompt_parts.is_empty() {
+        None
+    } else {
+        Some(prompt_parts.join("\n\n"))
+    }
+}
+
+#[cfg(test)]
+mod openai_prompt_tests {
+    use super::build_openai_transcription_prompt;
+
+    #[test]
+    fn keeps_existing_custom_word_prompt_for_openai() {
+        let custom_words = vec!["Handy".to_string(), "Parakeet".to_string()];
+        assert_eq!(
+            build_openai_transcription_prompt("", &custom_words).as_deref(),
+            Some("Handy, Parakeet")
+        );
+    }
+
+    #[test]
+    fn combines_openai_prompt_with_custom_words() {
+        let custom_words = vec!["Handy".to_string()];
+        assert_eq!(
+            build_openai_transcription_prompt("Transcribe literally.", &custom_words).as_deref(),
+            Some("Transcribe literally.\n\nHandy")
+        );
     }
 }
 

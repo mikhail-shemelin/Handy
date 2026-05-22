@@ -3,8 +3,19 @@ use crate::managers::transcription::TranscriptionManager;
 use crate::shortcut;
 use crate::TranscriptionCoordinator;
 use log::info;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
+
+static CANCELLATION_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn cancellation_generation() -> u64 {
+    CANCELLATION_GENERATION.load(Ordering::SeqCst)
+}
+
+pub fn operation_cancelled_since(generation: u64) -> bool {
+    cancellation_generation() != generation
+}
 
 // Re-export all utility modules for easy access
 // pub use crate::audio_feedback::*;
@@ -16,6 +27,7 @@ pub use crate::tray::*;
 /// Handles cancelling both recording and transcription operations and updates UI state.
 pub fn cancel_current_operation(app: &AppHandle) {
     info!("Initiating operation cancellation...");
+    CANCELLATION_GENERATION.fetch_add(1, Ordering::SeqCst);
 
     // Unregister the cancel shortcut asynchronously
     shortcut::unregister_cancel_shortcut(app);

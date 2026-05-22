@@ -778,12 +778,15 @@ impl ModelManager {
         // in available_models (e.g. deleted custom model file)
         if !settings.selected_model.is_empty() {
             let models = self.available_models.lock().unwrap();
-            let exists = models.contains_key(&settings.selected_model);
+            let selected_model = models.get(&settings.selected_model);
+            let selected_model_is_downloaded = selected_model
+                .map(|model| model.is_downloaded)
+                .unwrap_or(false);
             drop(models);
 
-            if !exists {
+            if !selected_model_is_downloaded {
                 info!(
-                    "Selected model '{}' not found in available models, clearing selection",
+                    "Selected model '{}' is unavailable, clearing selection",
                     settings.selected_model
                 );
                 settings.selected_model = String::new();

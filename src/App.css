@@ -4,8 +4,9 @@
   /* Design tokens */
   --color-text: #0f0f0f;
   --color-background: #fbfbfb;
-  --color-background-ui: #da5893;
-  --color-logo-primary: #faa2ca;
+  --color-background-ui: #c45bad;
+  --color-logo-primary: #dc91d6;
+  --color-logo-accent: #18b8be;
   --color-logo-stroke: #382731;
   --color-text-stroke: #f6f6f6;
   --color-mid-gray: #808080;
@@ -57,7 +58,8 @@
     /* Colors - Dark Theme */
     --color-text: #fbfbfb;
     --color-background: #2c2b29;
-    --color-logo-primary: #f28cbb;
+    --color-logo-primary: #e398d8;
+    --color-logo-accent: #25c4ca;
     --color-logo-stroke: #fad1ed;
   }
 }
@@ -105,4 +107,8 @@
   fill: var(--color-logo-stroke);
   stroke: var(--color-logo-stroke);
   stroke-width: 1;
+}
+
+.logo-accent {
+  fill: var(--color-logo-accent);
 }

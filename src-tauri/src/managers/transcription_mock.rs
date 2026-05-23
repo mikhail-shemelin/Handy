@@ -47,6 +47,10 @@ impl TranscriptionManager {
 
     pub fn maybe_unload_immediately(&self, _context: &str) {}
 
+    pub fn maybe_unload_immediately_after_loading(&self, _context: &str) {}
+
+    pub fn maybe_unload_immediately_for_openai_route(&self, _context: &str) {}
+
     pub fn load_model(&self, _model_id: &str) -> Result<()> {
         Ok(())
     }

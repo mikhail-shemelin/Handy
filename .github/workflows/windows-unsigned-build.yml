@@ -8,6 +8,8 @@ on:
         required: false
         type: string
         default: "main"
+  push:
+    branches: [main]
 
 jobs:
   build:
@@ -22,4 +24,4 @@ jobs:
       sign-binaries: false
       disable-updater-artifacts: true
       asset-prefix: "handy-hybrid-windows-unsigned"
-      ref: ${{ inputs.ref }}
+      ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}

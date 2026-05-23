@@ -1,8 +1,8 @@
-# Handy
+# Handy Hybrid
 
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com/invite/WVBeWsNXK4)
 
-> This repository is a personal fork of [cjpais/Handy](https://github.com/cjpais/Handy).
+> This repository is a personal fork of [cjpais/Handy](https://github.com/cjpais/Handy). Handy Hybrid uses a separate app identifier from upstream Handy, so fork builds do not share settings or history with the official app.
 
 **A free, open source, and extensible speech-to-text application that works offline by default.**
 
@@ -39,12 +39,9 @@ The process is local by default:
 
 ### Installation
 
-1. Download the latest release from the [releases page](https://github.com/cjpais/Handy/releases) or the [website](https://handy.computer)
-   - **macOS**: Also available via [Homebrew cask](https://formulae.brew.sh/cask/handy): `brew install --cask handy`
-   - **Windows**: Also available via [winget](https://github.com/microsoft/winget-pkgs): `winget install cjpais.Handy` \
-     **Note:** The Homebrew cask and winget package are not maintained by the Handy developers.
+1. Download the latest release from the [fork releases page](https://github.com/mikhail-shemelin/Handy/releases)
 2. Install the application
-3. Launch Handy and grant necessary system permissions (microphone, accessibility)
+3. Launch Handy Hybrid and grant necessary system permissions (microphone, accessibility)
 4. Configure your preferred keyboard shortcuts in Settings
 5. Start transcribing!
 
@@ -269,13 +266,13 @@ We're actively working on several features and improvements. Contributions and f
 
 ## Verify Release Signatures
 
-Handy release artifacts are signed with Tauri's updater signature format. The public key is stored in [`src-tauri/tauri.conf.json`](src-tauri/tauri.conf.json) under `plugins.updater.pubkey`.
+Handy Hybrid release artifacts are signed with Tauri's updater signature format. The public key is stored in [`src-tauri/tauri.conf.json`](src-tauri/tauri.conf.json) under `plugins.updater.pubkey`.
 
 To verify a release manually, set `ARTIFACT` to the filename you downloaded, save the `pubkey` value from `src-tauri/tauri.conf.json` to `handy.pub.b64`, then decode the public key and matching `.sig` file from base64 and verify the artifact with `minisign`:
 
 ```bash
 # Replace with the file you downloaded
-ARTIFACT="Handy_0.8.1_amd64.AppImage"
+ARTIFACT="Handy_Hybrid_0.8.3_amd64.AppImage"
 
 python3 - "$ARTIFACT" <<'PY'
 import base64, pathlib, sys
@@ -310,7 +307,7 @@ If you're behind a proxy, firewall, or in a restricted network environment where
 
 #### Step 1: Find Your App Data Directory
 
-1. Open Handy settings
+1. Open Handy Hybrid settings
 2. Navigate to the **About** section
 3. Copy the "App Data Directory" path shown there, or use the shortcuts:
    - **macOS**: `Cmd+Shift+D` to open debug menu
@@ -318,9 +315,9 @@ If you're behind a proxy, firewall, or in a restricted network environment where
 
 The typical paths are:
 
-- **macOS**: `~/Library/Application Support/com.pais.handy/`
-- **Windows**: `C:\Users\{username}\AppData\Roaming\com.pais.handy\`
-- **Linux**: `~/.config/com.pais.handy/`
+- **macOS**: `~/Library/Application Support/com.mikhail-shemelin.handy-hybrid/`
+- **Windows**: `C:\Users\{username}\AppData\Roaming\com.mikhail-shemelin.handy-hybrid\`
+- **Linux**: `~/.config/com.mikhail-shemelin.handy-hybrid/`
 
 #### Step 2: Create Models Directory
 
@@ -328,10 +325,10 @@ Inside your app data directory, create a `models` folder if it doesn't already e
 
 ```bash
 # macOS/Linux
-mkdir -p ~/Library/Application\ Support/com.pais.handy/models
+mkdir -p ~/Library/Application\ Support/com.mikhail-shemelin.handy-hybrid/models
 
 # Windows (PowerShell)
-New-Item -ItemType Directory -Force -Path "$env:APPDATA\com.pais.handy\models"
+New-Item -ItemType Directory -Force -Path "$env:APPDATA\com.mikhail-shemelin.handy-hybrid\models"
 ```
 
 #### Step 3: Download Model Files

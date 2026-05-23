@@ -21,5 +21,5 @@ jobs:
       upload-artifacts: true
       sign-binaries: false
       disable-updater-artifacts: true
-      asset-prefix: "handy-windows-unsigned"
+      asset-prefix: "handy-hybrid-windows-unsigned"
       ref: ${{ inputs.ref }}

@@ -205,13 +205,13 @@ fn build_headers(api_key: &str) -> Result<HeaderMap> {
     );
     headers.insert(
         REFERER,
-        HeaderValue::from_static("https://github.com/cjpais/Handy"),
+        HeaderValue::from_static("https://github.com/mikhail-shemelin/Handy"),
     );
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_static("Handy/1.0 (+https://github.com/cjpais/Handy)"),
+        HeaderValue::from_static("Handy-Hybrid/1.0 (+https://github.com/mikhail-shemelin/Handy)"),
     );
-    headers.insert("X-Title", HeaderValue::from_static("Handy"));
+    headers.insert("X-Title", HeaderValue::from_static("Handy Hybrid"));
     Ok(headers)
 }
 

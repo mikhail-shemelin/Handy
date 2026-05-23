@@ -32,6 +32,10 @@ on:
         required: false
         type: boolean
         default: false
+      disable-updater-artifacts:
+        required: false
+        type: boolean
+        default: false
       repository:
         required: false
         type: string
@@ -336,6 +340,28 @@ jobs:
              --arg sov "$ORT_DIR/lib/libonnxruntime.so.1.24.2" \
             '.bundle.linux.deb.files["/usr/lib/libonnxruntime.so"] = $so | .bundle.linux.deb.files["/usr/lib/libonnxruntime.so.1"] = $so1 | .bundle.linux.deb.files["/usr/lib/libonnxruntime.so.1.24.2"] = $sov' \
             src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
+
+      - name: Prepare unsigned build config
+        if: inputs.disable-updater-artifacts
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const path = "src-tauri/tauri.conf.json";
+          const config = JSON.parse(fs.readFileSync(path, "utf8"));
+
+          config.bundle.createUpdaterArtifacts = false;
+          if (config.bundle.windows) {
+            delete config.bundle.windows.signCommand;
+          }
+          if (process.env.GITHUB_REPOSITORY && config.plugins?.updater?.endpoints) {
+            config.plugins.updater.endpoints = [
+              `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/latest/download/latest.json`,
+            ];
+          }
+
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          NODE
 
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0

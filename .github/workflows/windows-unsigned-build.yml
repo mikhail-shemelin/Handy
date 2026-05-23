@@ -1,0 +1,25 @@
+name: "Unsigned Windows Build"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit to build"
+        required: false
+        type: string
+        default: "main"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build.yml
+    with:
+      platform: "windows-latest"
+      target: "x86_64-pc-windows-msvc"
+      build-args: ""
+      upload-artifacts: true
+      sign-binaries: false
+      disable-updater-artifacts: true
+      asset-prefix: "handy-windows-unsigned"
+      ref: ${{ inputs.ref }}

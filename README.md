@@ -2,6 +2,8 @@
 
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com/invite/WVBeWsNXK4)
 
+> This repository is a personal fork of [cjpais/Handy](https://github.com/cjpais/Handy).
+
 **A free, open source, and extensible speech-to-text application that works offline by default.**
 
 Handy is a cross-platform desktop application that provides simple, privacy-focused speech transcription. Press a shortcut, speak, and have your words appear in any text field. By default this happens on your own computer without sending any information to the cloud.

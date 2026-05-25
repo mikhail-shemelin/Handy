@@ -1,11 +1,11 @@
 [package]
-name = "handy"
+name = "handy-hybrid"
 version = "0.8.3"
 description = "Handy Hybrid"
 authors = ["cjpais"]
 edition = "2021"
 license = "MIT"
-default-run = "handy"
+default-run = "handy-hybrid"
 
 [profile.dev]
 incremental = true # Compile your binary in smaller steps.

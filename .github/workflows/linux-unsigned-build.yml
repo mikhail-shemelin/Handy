@@ -1,0 +1,37 @@
+name: "Unsigned Linux Build"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit to build"
+        required: false
+        type: string
+        default: "main"
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "ubuntu-22.04"
+            args: "--bundles deb"
+            target: "x86_64-unknown-linux-gnu"
+          - platform: "ubuntu-24.04"
+            args: "--bundles appimage,rpm"
+            target: "x86_64-unknown-linux-gnu"
+    uses: ./.github/workflows/build.yml
+    with:
+      platform: ${{ matrix.platform }}
+      target: ${{ matrix.target }}
+      build-args: ${{ matrix.args }}
+      upload-artifacts: true
+      sign-binaries: false
+      disable-updater-artifacts: true
+      asset-prefix: "handy-hybrid-linux-unsigned"
+      ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}

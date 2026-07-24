@@ -20,14 +20,17 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{ModelInfo, ModelManager};
+use crate::managers::transcription::TranscriptionManager;
 use crate::openai_transcription;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::settings::APPLE_INTELLIGENCE_DEFAULT_MODEL_ID;
 use crate::settings::{
     self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation, LLMPrompt,
-    OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TranscriptionProvider, TypingTool,
-    APPLE_INTELLIGENCE_PROVIDER_ID, OPENAI_TRANSCRIPTION_PROVIDER_ID,
+    OverlayPosition, OverlayStyle, PasteMethod, ShortcutBinding, SoundTheme, Theme,
+    TranscriptionProvider, TypingTool, APPLE_INTELLIGENCE_PROVIDER_ID,
+    OPENAI_TRANSCRIPTION_PROVIDER_ID,
 };
 use crate::tray;
 
@@ -286,14 +289,12 @@ pub fn change_keyboard_implementation_setting(
     settings::write_settings(&app, settings);
 
     // Initialize new implementation if needed (HandyKeys needs state)
-    if new_impl == KeyboardImplementation::HandyKeys {
-        if initialize_handy_keys_with_rollback(&app)? {
-            // Shortcuts already registered during init
-            return Ok(ImplementationChangeResult {
-                success: true,
-                reset_bindings: vec![],
-            });
-        }
+    if new_impl == KeyboardImplementation::HandyKeys && initialize_handy_keys_with_rollback(&app)? {
+        // Shortcuts already registered during init
+        return Ok(ImplementationChangeResult {
+            success: true,
+            reset_bindings: vec![],
+        });
     }
 
     // Register all shortcuts with new implementation, resetting invalid ones
@@ -521,6 +522,44 @@ pub fn change_sound_theme_setting(app: AppHandle, theme: String) -> Result<(), S
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_theme_setting(app: AppHandle, theme: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    let parsed = match theme.as_str() {
+        "system" => Theme::System,
+        "light" => Theme::Light,
+        "dark" => Theme::Dark,
+        other => {
+            warn!("Invalid theme '{}', defaulting to system", other);
+            Theme::System
+        }
+    };
+    settings.theme = parsed;
+    settings::write_settings(&app, settings);
+    #[cfg(target_os = "windows")]
+    apply_window_theme(&app, parsed);
+    Ok(())
+}
+
+/// Applies the appearance setting to the Windows title bar, which CSS
+/// `data-theme` cannot reach. `System` clears the override so the window follows
+/// Windows. Call this on startup and whenever the setting changes to keep the
+/// title bar in sync with the in-app palette.
+#[cfg(target_os = "windows")]
+pub fn apply_window_theme(app: &AppHandle, theme: Theme) {
+    let window_theme = match theme {
+        Theme::System => None,
+        Theme::Light => Some(tauri::Theme::Light),
+        Theme::Dark => Some(tauri::Theme::Dark),
+    };
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(e) = window.set_theme(window_theme) {
+            warn!("Failed to apply window theme: {}", e);
+        }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_translate_to_english_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.translate_to_english = enabled;
@@ -542,9 +581,10 @@ pub fn change_selected_language_setting(app: AppHandle, language: String) -> Res
 pub fn change_overlay_position_setting(app: AppHandle, position: String) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     let parsed = match position.as_str() {
-        "none" => OverlayPosition::None,
+        // "none" is retired (visibility is overlay_style now); fold legacy callers
+        // onto Bottom rather than warn.
+        "none" | "bottom" => OverlayPosition::Bottom,
         "top" => OverlayPosition::Top,
-        "bottom" => OverlayPosition::Bottom,
         other => {
             warn!("Invalid overlay position '{}', defaulting to bottom", other);
             OverlayPosition::Bottom
@@ -553,7 +593,35 @@ pub fn change_overlay_position_setting(app: AppHandle, position: String) -> Resu
     settings.overlay_position = parsed;
     settings::write_settings(&app, settings);
 
+    // Whether the overlay shows at all is owned by overlay_style now; position
+    // only ever toggles Top/Bottom, so the enabled cache is untouched here.
     // Update overlay position without recreating window
+    crate::utils::update_overlay_position(&app);
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_overlay_style_setting(app: AppHandle, style: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    let parsed = match style.as_str() {
+        "none" => OverlayStyle::None,
+        "minimal" => OverlayStyle::Minimal,
+        "live" => OverlayStyle::Live,
+        other => {
+            warn!("Invalid overlay style '{}', defaulting to minimal", other);
+            OverlayStyle::Minimal
+        }
+    };
+    settings.overlay_style = parsed;
+    settings::write_settings(&app, settings);
+
+    // Keep the cached overlay-enabled flag in sync so emit_levels stops (or
+    // resumes) emitting on the next audio callback.
+    crate::overlay::update_overlay_enabled_cache(parsed != OverlayStyle::None);
+
+    // Reposition in case the window needs to re-center for the new style.
     crate::utils::update_overlay_position(&app);
 
     Ok(())
@@ -565,6 +633,10 @@ pub fn change_debug_mode_setting(app: AppHandle, enabled: bool) -> Result<(), St
     let mut settings = settings::get_settings(&app);
     settings.debug_mode = enabled;
     settings::write_settings(&app, settings);
+
+    // Keep webview log streaming in sync: the live log viewer only exists in
+    // debug mode, so logs are forwarded to the frontend only while it is on.
+    crate::WEBVIEW_LOG_STREAMING.store(enabled, std::sync::atomic::Ordering::Relaxed);
 
     // Emit event to notify frontend of debug mode change
     let _ = app.emit(
@@ -644,6 +716,49 @@ pub fn change_update_checks_setting(app: AppHandle, enabled: bool) -> Result<(),
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_show_whats_new_on_update_setting(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.show_whats_new_on_update = enabled;
+    settings::write_settings(&app, settings);
+
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({
+            "setting": "show_whats_new_on_update",
+            "value": enabled
+        }),
+    );
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_whats_new_last_seen_version_setting(
+    app: AppHandle,
+    version: String,
+) -> Result<(), String> {
+    let version = version.trim().to_string();
+    let mut settings = settings::get_settings(&app);
+    settings.whats_new_last_seen_version = version.clone();
+    settings::write_settings(&app, settings);
+
+    let _ = app.emit(
+        "settings-changed",
+        serde_json::json!({
+            "setting": "whats_new_last_seen_version",
+            "value": version
+        }),
+    );
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn update_custom_words(app: AppHandle, words: Vec<String>) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.custom_words = words;
@@ -677,6 +792,15 @@ pub fn change_extra_recording_buffer_setting(app: AppHandle, ms: u64) -> Result<
 pub fn change_paste_delay_ms_setting(app: AppHandle, ms: u64) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.paste_delay_ms = ms;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_paste_delay_after_ms_setting(app: AppHandle, ms: u64) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.paste_delay_after_ms = ms;
     settings::write_settings(&app, settings);
     Ok(())
 }
@@ -827,6 +951,14 @@ pub fn change_experimental_enabled_setting(app: AppHandle, enabled: bool) -> Res
     Ok(())
 }
 
+fn reject_route_change_while_recording(app: &AppHandle) -> Result<(), String> {
+    if app.state::<Arc<AudioRecordingManager>>().is_recording() {
+        Err("Stop the current recording before changing transcription providers.".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn change_transcription_provider_setting(
@@ -834,9 +966,25 @@ pub fn change_transcription_provider_setting(
     model_manager: State<'_, Arc<ModelManager>>,
     provider: TranscriptionProvider,
 ) -> Result<(), String> {
+    reject_route_change_while_recording(&app)?;
     let mut settings = settings::get_settings(&app);
+
     match provider {
-        TranscriptionProvider::Openai => validate_openai_transcription_route(&settings)?,
+        TranscriptionProvider::Openai => {
+            validate_openai_transcription_route(&settings)?;
+            let transcription_manager = app.state::<Arc<TranscriptionManager>>();
+            let _loading_guard = transcription_manager.try_start_loading().ok_or_else(|| {
+                "A local model load is in progress; try again shortly.".to_string()
+            })?;
+            let previous_settings = settings.clone();
+            settings.transcription_provider = TranscriptionProvider::Openai;
+            settings.onboarding_completed = true;
+            settings::write_settings(&app, settings);
+            if let Err(error) = transcription_manager.unload_model() {
+                settings::write_settings(&app, previous_settings);
+                return Err(format!("Failed to unload local model: {error}"));
+            }
+        }
         TranscriptionProvider::Local => {
             let selected_model = model_manager.get_model_info(&settings.selected_model);
             let available_models = model_manager.get_available_models();
@@ -845,12 +993,11 @@ pub fn change_transcription_provider_setting(
                 selected_model,
                 available_models,
             )?;
+            crate::commands::models::switch_active_model(&app, &settings.selected_model)?;
         }
     }
 
-    settings.transcription_provider = provider;
-    settings::write_settings(&app, settings);
-    crate::tray::update_tray_menu(&app, &crate::tray::TrayIconState::Idle, None);
+    crate::tray::update_tray_menu(&app, None);
     Ok(())
 }
 
@@ -858,18 +1005,14 @@ fn validate_openai_transcription_route(settings: &settings::AppSettings) -> Resu
     if !settings.openai_transcription_enabled {
         return Err("OpenAI transcription is not enabled".to_string());
     }
-
     if settings.openai_transcription_api_key().trim().is_empty() {
         return Err("OpenAI transcription API key is required".to_string());
     }
-
     openai_transcription::normalize_base_url(&settings.openai_transcription_base_url)
         .map_err(|error| error.to_string())?;
-
     if settings.openai_transcription_model.trim().is_empty() {
         return Err("OpenAI transcription model is required".to_string());
     }
-
     Ok(())
 }
 
@@ -880,27 +1023,22 @@ pub fn change_openai_transcription_enabled_setting(
     model_manager: State<'_, Arc<ModelManager>>,
     enabled: bool,
 ) -> Result<(), String> {
+    reject_route_change_while_recording(&app)?;
     let mut settings = settings::get_settings(&app);
-    if !enabled {
-        let selected_model_id = settings.selected_model.clone();
-        let selected_model = model_manager.get_model_info(&selected_model_id);
-        let available_models = model_manager.get_available_models();
+    if !enabled && settings.transcription_provider == TranscriptionProvider::Openai {
+        let selected_model = model_manager.get_model_info(&settings.selected_model);
         select_valid_local_model_before_disabling_openai(
             &mut settings,
             selected_model,
-            available_models,
+            model_manager.get_available_models(),
         )?;
-        let local_model_to_load = settings.selected_model.clone();
-
-        if settings.transcription_provider == TranscriptionProvider::Openai {
-            crate::commands::models::switch_active_model_and_load(&app, &local_model_to_load)?;
-            settings = settings::get_settings(&app);
-        }
+        crate::commands::models::switch_active_model(&app, &settings.selected_model)?;
+        settings = settings::get_settings(&app);
     }
 
     settings.set_openai_transcription_enabled(enabled);
     settings::write_settings(&app, settings);
-    crate::tray::update_tray_menu(&app, &crate::tray::TrayIconState::Idle, None);
+    crate::tray::update_tray_menu(&app, None);
     Ok(())
 }
 
@@ -912,14 +1050,9 @@ fn select_valid_local_model_before_disabling_openai(
     if settings.transcription_provider != TranscriptionProvider::Openai {
         return Ok(());
     }
-
-    let current_selection_is_valid = selected_model
-        .map(|model| model.is_downloaded)
-        .unwrap_or(false);
-    if current_selection_is_valid {
+    if selected_model.is_some_and(|model| model.is_downloaded) {
         return Ok(());
     }
-
     if let Some(model) = available_models
         .into_iter()
         .find(|model| model.is_downloaded)
@@ -927,7 +1060,6 @@ fn select_valid_local_model_before_disabling_openai(
         settings.selected_model = model.id;
         return Ok(());
     }
-
     Err("Download a local model before disabling OpenAI transcription.".to_string())
 }
 
@@ -939,7 +1071,6 @@ pub fn change_openai_transcription_base_url_setting(
 ) -> Result<(), String> {
     let base_url =
         openai_transcription::normalize_base_url(&base_url).map_err(|error| error.to_string())?;
-
     let mut settings = settings::get_settings(&app);
     settings.openai_transcription_base_url = base_url;
     settings::write_settings(&app, settings);
@@ -971,7 +1102,6 @@ pub fn change_openai_transcription_model_setting(
     if model.is_empty() {
         return Err("OpenAI transcription model cannot be empty".to_string());
     }
-
     let mut settings = settings::get_settings(&app);
     settings.openai_transcription_model = model;
     settings::write_settings(&app, settings);
@@ -1241,13 +1371,22 @@ pub fn change_lazy_stream_close_setting(app: AppHandle, enabled: bool) -> Result
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_vad_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.vad_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_app_language_setting(app: AppHandle, language: String) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.app_language = language.clone();
     settings::write_settings(&app, settings);
 
     // Refresh the tray menu with the new language
-    tray::update_tray_menu(&app, &tray::TrayIconState::Idle, Some(&language));
+    tray::update_tray_menu(&app, Some(&language));
 
     Ok(())
 }
@@ -1265,29 +1404,24 @@ pub fn change_show_tray_icon_setting(app: AppHandle, enabled: bool) -> Result<()
     Ok(())
 }
 
-/// Save accelerator settings, re-apply globals, and unload the model so it
-/// reloads with the new backend on next transcription.
-fn apply_and_reload_accelerator(app: &AppHandle, s: settings::AppSettings) {
+/// Save accelerator settings and make the next model use reload with them.
+/// The currently running transcription, if any, keeps its existing engine.
+fn save_accelerator_and_reload_next_use(app: &AppHandle, s: settings::AppSettings) {
     settings::write_settings(app, s);
-    crate::managers::transcription::apply_accelerator_settings(app);
 
     let tm = app.state::<std::sync::Arc<crate::managers::transcription::TranscriptionManager>>();
-    if tm.is_model_loaded() {
-        if let Err(e) = tm.unload_model() {
-            log::warn!("Failed to unload model after accelerator change: {e}");
-        }
-    }
+    tm.reload_model_on_next_use();
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn change_whisper_accelerator_setting(
+pub fn change_transcribe_accelerator_setting(
     app: AppHandle,
-    accelerator: settings::WhisperAcceleratorSetting,
+    accelerator: settings::TranscribeAcceleratorSetting,
 ) -> Result<(), String> {
     let mut s = settings::get_settings(&app);
-    s.whisper_accelerator = accelerator;
-    apply_and_reload_accelerator(&app, s);
+    s.transcribe_accelerator = accelerator;
+    save_accelerator_and_reload_next_use(&app, s);
     Ok(())
 }
 
@@ -1299,23 +1433,23 @@ pub fn change_ort_accelerator_setting(
 ) -> Result<(), String> {
     let mut s = settings::get_settings(&app);
     s.ort_accelerator = accelerator;
-    apply_and_reload_accelerator(&app, s);
+    save_accelerator_and_reload_next_use(&app, s);
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn change_whisper_gpu_device(app: AppHandle, device: i32) -> Result<(), String> {
+pub fn change_transcribe_gpu_device(app: AppHandle, device: i32) -> Result<(), String> {
     let mut s = settings::get_settings(&app);
-    s.whisper_gpu_device = device;
-    apply_and_reload_accelerator(&app, s);
+    s.transcribe_gpu_device = device;
+    save_accelerator_and_reload_next_use(&app, s);
     Ok(())
 }
 
 /// Return which accelerators and GPU devices are available for this build.
 ///
 /// First-call cost is dominated by enumerating GPU devices through the
-/// whisper.cpp Metal/Vulkan backend, which loads dynamic libraries and
+/// transcribe.cpp Metal/Vulkan backend, which loads dynamic libraries and
 /// probes hardware. Run it on the blocking pool so the webview thread
 /// stays responsive — see also the startup pre-warm in `lib.rs`.
 #[tauri::command]
@@ -1324,129 +1458,4 @@ pub async fn get_available_accelerators() -> crate::managers::transcription::Ava
     tauri::async_runtime::spawn_blocking(crate::managers::transcription::get_available_accelerators)
         .await
         .expect("get_available_accelerators panicked")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::managers::model::EngineType;
-
-    fn configured_openai_settings() -> settings::AppSettings {
-        let mut app_settings = settings::get_default_settings();
-        app_settings.openai_transcription_enabled = true;
-        app_settings.openai_transcription_api_keys.insert(
-            OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(),
-            "sk-test".to_string(),
-        );
-        app_settings
-    }
-
-    fn downloaded_model(id: &str) -> ModelInfo {
-        ModelInfo {
-            id: id.to_string(),
-            name: id.to_string(),
-            description: String::new(),
-            filename: format!("{id}.bin"),
-            url: None,
-            sha256: None,
-            size_mb: 1,
-            is_downloaded: true,
-            is_downloading: false,
-            partial_size: 0,
-            is_directory: false,
-            engine_type: EngineType::Whisper,
-            accuracy_score: 0.0,
-            speed_score: 0.0,
-            supports_translation: false,
-            is_recommended: false,
-            supported_languages: Vec::new(),
-            supports_language_selection: false,
-            is_custom: false,
-        }
-    }
-
-    #[test]
-    fn openai_route_validation_rejects_disabled_openai() {
-        let mut app_settings = configured_openai_settings();
-        app_settings.openai_transcription_enabled = false;
-
-        assert_eq!(
-            validate_openai_transcription_route(&app_settings),
-            Err("OpenAI transcription is not enabled".to_string())
-        );
-    }
-
-    #[test]
-    fn openai_route_validation_rejects_missing_api_key() {
-        let mut app_settings = configured_openai_settings();
-        app_settings
-            .openai_transcription_api_keys
-            .insert(OPENAI_TRANSCRIPTION_PROVIDER_ID.to_string(), String::new());
-
-        assert_eq!(
-            validate_openai_transcription_route(&app_settings),
-            Err("OpenAI transcription API key is required".to_string())
-        );
-    }
-
-    #[test]
-    fn openai_route_validation_rejects_invalid_endpoint() {
-        let mut app_settings = configured_openai_settings();
-        app_settings.openai_transcription_base_url = "http://example.com".to_string();
-
-        assert_eq!(
-            validate_openai_transcription_route(&app_settings),
-            Err(
-                "OpenAI transcription endpoint must use HTTPS unless it points to localhost"
-                    .to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn openai_route_validation_accepts_configured_openai() {
-        assert!(validate_openai_transcription_route(&configured_openai_settings()).is_ok());
-    }
-
-    #[test]
-    fn openai_disable_validation_rejects_active_openai_without_local_model() {
-        let mut app_settings = configured_openai_settings();
-        app_settings.transcription_provider = TranscriptionProvider::Openai;
-        app_settings.selected_model = String::new();
-
-        assert_eq!(
-            select_valid_local_model_before_disabling_openai(&mut app_settings, None, Vec::new()),
-            Err("Download a local model before disabling OpenAI transcription.".to_string())
-        );
-    }
-
-    #[test]
-    fn openai_disable_validation_accepts_active_openai_with_valid_local_model() {
-        let mut app_settings = configured_openai_settings();
-        app_settings.transcription_provider = TranscriptionProvider::Openai;
-        app_settings.selected_model = "parakeet-v3".to_string();
-
-        assert!(select_valid_local_model_before_disabling_openai(
-            &mut app_settings,
-            Some(downloaded_model("parakeet-v3")),
-            Vec::new()
-        )
-        .is_ok());
-        assert_eq!(app_settings.selected_model, "parakeet-v3");
-    }
-
-    #[test]
-    fn openai_disable_validation_selects_available_local_model() {
-        let mut app_settings = configured_openai_settings();
-        app_settings.transcription_provider = TranscriptionProvider::Openai;
-        app_settings.selected_model = "deleted-model".to_string();
-
-        assert!(select_valid_local_model_before_disabling_openai(
-            &mut app_settings,
-            None,
-            vec![downloaded_model("parakeet-v3")]
-        )
-        .is_ok());
-        assert_eq!(app_settings.selected_model, "parakeet-v3");
-    }
 }

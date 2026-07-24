@@ -42,6 +42,7 @@ export const isValidOpenAiTranscriptionEndpoint = (
   try {
     const url = new URL(trimmed);
     if (url.search || url.hash) return false;
+    if (url.username || url.password) return false;
 
     if (url.protocol === "https:") return true;
     if (url.protocol !== "http:") return false;

@@ -1,7 +1,7 @@
 name: "Main Branch Build"
 
 # Manual full cross-platform signed build. Fork main pushes use the unsigned
-# Windows build workflow instead.
+# Windows and Linux build workflows instead.
 
 on: workflow_dispatch
 

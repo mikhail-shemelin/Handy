@@ -1,12 +1,12 @@
+//! Portable mode support for Handy Hybrid.
+//!
+//! When a file named `portable` exists next to the executable, all user data
+//! (settings, models, recordings, database, logs) is stored in a `Data/`
+//! directory alongside the executable instead of `%APPDATA%`.
+
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use tauri::Manager;
-
-/// Portable mode support for Handy Hybrid.
-///
-/// When a file named `portable` exists next to the executable, all user data
-/// (settings, models, recordings, database, logs) is stored in a `Data/`
-/// directory alongside the executable instead of `%APPDATA%`.
 
 static PORTABLE_DATA_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 const PORTABLE_MARKER: &str = "Handy Hybrid Portable Mode";
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_legacy_magic_string_enables_portable() {
-        let dir = std::env::temp_dir().join("handy_test_legacy_valid");
+        let dir = std::env::temp_dir().join("handy_hybrid_test_legacy_valid");
         std::fs::create_dir_all(&dir).unwrap();
         let marker = dir.join("portable");
         let mut f = std::fs::File::create(&marker).unwrap();

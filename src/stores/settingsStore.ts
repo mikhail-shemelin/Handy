@@ -4,10 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   AppSettings as Settings,
   AudioDevice,
-  WhisperAcceleratorSetting,
+  TranscribeAcceleratorSetting,
   OrtAcceleratorSetting,
-  TranscriptionProvider,
-  Result,
 } from "@/bindings";
 import { commands } from "@/bindings";
 
@@ -75,44 +73,6 @@ const DEFAULT_AUDIO_DEVICE: AudioDevice = {
   is_default: true,
 };
 
-const unwrapCommandResult = async <T, E>(
-  promise: Promise<Result<T, E>>,
-): Promise<T> => {
-  const result = await promise;
-  if (result.status === "error") {
-    throw new Error(String(result.error));
-  }
-  return result.data;
-};
-
-const normalizeOptimisticSettingUpdate = <K extends keyof Settings>(
-  settings: Settings,
-  key: K,
-  value: Settings[K],
-): Settings => {
-  const updatedSettings = { ...settings, [key]: value };
-
-  if (
-    key !== "openai_transcription_enabled" ||
-    settings.transcription_provider !== "openai"
-  ) {
-    return updatedSettings;
-  }
-
-  const enabled = value as boolean;
-  const enablingFromDisabled =
-    enabled && settings.openai_transcription_enabled !== true;
-
-  if (!enabled || enablingFromDisabled) {
-    return {
-      ...updatedSettings,
-      transcription_provider: "local",
-    };
-  }
-
-  return updatedSettings;
-};
-
 const settingUpdaters: {
   [K in keyof Settings]?: (value: Settings[K]) => Promise<unknown>;
 } = {
@@ -128,34 +88,10 @@ const settingUpdaters: {
     commands.changeAutostartSetting(value as boolean),
   update_checks_enabled: (value) =>
     commands.changeUpdateChecksSetting(value as boolean),
-  transcription_provider: (value) =>
-    unwrapCommandResult(
-      commands.changeTranscriptionProviderSetting(
-        value as TranscriptionProvider,
-      ),
-    ),
-  openai_transcription_enabled: (value) =>
-    unwrapCommandResult(
-      commands.changeOpenaiTranscriptionEnabledSetting(value as boolean),
-    ),
-  openai_transcription_base_url: (value) =>
-    unwrapCommandResult(
-      commands.changeOpenaiTranscriptionBaseUrlSetting(value as string),
-    ),
-  openai_transcription_model: (value) =>
-    unwrapCommandResult(
-      commands.changeOpenaiTranscriptionModelSetting(value as string),
-    ),
-  openai_transcription_prompt: (value) =>
-    unwrapCommandResult(
-      commands.changeOpenaiTranscriptionPromptSetting(value as string),
-    ),
-  openai_transcription_chunking_enabled: (value) =>
-    unwrapCommandResult(
-      commands.changeOpenaiTranscriptionChunkingEnabledSetting(
-        value as boolean,
-      ),
-    ),
+  show_whats_new_on_update: (value) =>
+    commands.changeShowWhatsNewOnUpdateSetting(value as boolean),
+  whats_new_last_seen_version: (value) =>
+    commands.changeWhatsNewLastSeenVersionSetting(value as string),
   push_to_talk: (value) => commands.changePttSetting(value as boolean),
   selected_microphone: (value) =>
     commands.setSelectedMicrophone(
@@ -187,6 +123,8 @@ const settingUpdaters: {
     commands.changeWordCorrectionThresholdSetting(value as number),
   paste_delay_ms: (value) =>
     commands.changePasteDelayMsSetting(value as number),
+  paste_delay_after_ms: (value) =>
+    commands.changePasteDelayAfterMsSetting(value as number),
   paste_method: (value) => commands.changePasteMethodSetting(value as string),
   typing_tool: (value) => commands.changeTypingToolSetting(value as string),
   external_script_path: (value) =>
@@ -207,20 +145,35 @@ const settingUpdaters: {
     commands.changeAppendTrailingSpaceSetting(value as boolean),
   log_level: (value) => commands.setLogLevel(value as any),
   app_language: (value) => commands.changeAppLanguageSetting(value as string),
+  theme: (value) => commands.changeThemeSetting(value as string),
   experimental_enabled: (value) =>
     commands.changeExperimentalEnabledSetting(value as boolean),
+  transcription_provider: (value) =>
+    commands.changeTranscriptionProviderSetting(value as "local" | "openai"),
+  openai_transcription_enabled: (value) =>
+    commands.changeOpenaiTranscriptionEnabledSetting(value as boolean),
+  openai_transcription_base_url: (value) =>
+    commands.changeOpenaiTranscriptionBaseUrlSetting(value as string),
+  openai_transcription_model: (value) =>
+    commands.changeOpenaiTranscriptionModelSetting(value as string),
+  openai_transcription_prompt: (value) =>
+    commands.changeOpenaiTranscriptionPromptSetting(value as string),
+  openai_transcription_chunking_enabled: (value) =>
+    commands.changeOpenaiTranscriptionChunkingEnabledSetting(value as boolean),
   lazy_stream_close: (value) =>
     commands.changeLazyStreamCloseSetting(value as boolean),
+  overlay_style: (value) => commands.changeOverlayStyleSetting(value as string),
+  vad_enabled: (value) => commands.changeVadEnabledSetting(value as boolean),
   show_tray_icon: (value) =>
     commands.changeShowTrayIconSetting(value as boolean),
-  whisper_accelerator: (value) =>
-    commands.changeWhisperAcceleratorSetting(
-      value as WhisperAcceleratorSetting,
+  transcribe_accelerator: (value) =>
+    commands.changeTranscribeAcceleratorSetting(
+      value as TranscribeAcceleratorSetting,
     ),
   ort_accelerator: (value) =>
     commands.changeOrtAcceleratorSetting(value as OrtAcceleratorSetting),
-  whisper_gpu_device: (value) =>
-    commands.changeWhisperGpuDevice(value as number),
+  transcribe_gpu_device: (value) =>
+    commands.changeTranscribeGpuDevice(value as number),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
 };
@@ -350,15 +303,12 @@ export const useSettingsStore = create<SettingsStore>()(
 
       try {
         set((state) => ({
-          settings: state.settings
-            ? normalizeOptimisticSettingUpdate(state.settings, key, value)
-            : null,
+          settings: state.settings ? { ...state.settings, [key]: value } : null,
         }));
 
         const updater = settingUpdaters[key];
         if (updater) {
           await updater(value);
-          await get().refreshSettings();
         } else if (key !== "bindings" && key !== "selected_model") {
           console.warn(`No handler for setting: ${String(key)}`);
         }
@@ -400,7 +350,7 @@ export const useSettingsStore = create<SettingsStore>()(
                 bindings: {
                   ...state.settings.bindings,
                   [id]: {
-                    ...state.settings.bindings[id]!,
+                    ...state.settings.bindings?.[id]!,
                     current_binding: binding,
                   },
                 },
@@ -431,7 +381,7 @@ export const useSettingsStore = create<SettingsStore>()(
                   bindings: {
                     ...state.settings.bindings,
                     [id]: {
-                      ...state.settings.bindings[id]!,
+                      ...state.settings.bindings?.[id]!,
                       current_binding: originalBinding,
                     },
                   },

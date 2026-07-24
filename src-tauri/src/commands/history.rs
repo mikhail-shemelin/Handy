@@ -85,7 +85,7 @@ pub async fn retry_history_entry_transcription(
     transcription_manager.initiate_model_load();
 
     let transcription = transcription_manager
-        .transcribe(samples)
+        .transcribe_completed_audio(samples)
         .await
         .map_err(|e| {
             error!(

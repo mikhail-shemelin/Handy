@@ -1,5 +1,6 @@
 use crate::audio_toolkit::encode_wav_bytes;
 use anyhow::{anyhow, Result};
+use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, REFERER, USER_AGENT};
 use reqwest::Url;
 use serde::Deserialize;
@@ -9,6 +10,7 @@ use std::time::Duration;
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
 
 pub struct OpenAiTranscriptionConfig {
     pub base_url: String,
@@ -27,6 +29,7 @@ struct TranscriptionResponse {
     logprobs: Option<Vec<OpenAiTranscriptionLogprob>>,
 }
 
+#[derive(Debug)]
 pub struct OpenAiTranscriptionResult {
     pub text: String,
     pub logprobs: Option<Vec<OpenAiTranscriptionLogprob>>,
@@ -40,6 +43,15 @@ pub struct OpenAiTranscriptionLogprob {
 pub async fn transcribe_samples(
     samples: &[f32],
     config: OpenAiTranscriptionConfig,
+) -> Result<OpenAiTranscriptionResult> {
+    transcribe_samples_with_timeouts(samples, config, REQUEST_TIMEOUT, CONNECT_TIMEOUT).await
+}
+
+async fn transcribe_samples_with_timeouts(
+    samples: &[f32],
+    config: OpenAiTranscriptionConfig,
+    request_timeout: Duration,
+    connect_timeout: Duration,
 ) -> Result<OpenAiTranscriptionResult> {
     let api_key = config.api_key.trim();
     if api_key.is_empty() {
@@ -68,8 +80,8 @@ pub async fn transcribe_samples(
     let url = format!("{base_url}/audio/{path}");
     let client = reqwest::Client::builder()
         .default_headers(build_headers(api_key)?)
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(connect_timeout)
+        .timeout(request_timeout)
         .build()?;
 
     let file_part = reqwest::multipart::Part::bytes(wav_bytes)
@@ -117,10 +129,9 @@ pub async fn transcribe_samples(
         })?;
     let status = response.status();
     if !status.is_success() {
-        let error_text = response
-            .text()
+        let error_text = read_error_body_limited(response)
             .await
-            .unwrap_or_else(|_| "Failed to read error response".to_string());
+            .replace(api_key, "[REDACTED]");
         return Err(anyhow!(
             "OpenAI transcription failed with status {}: {}",
             status,
@@ -150,6 +161,12 @@ pub fn normalize_base_url(base_url: &str) -> Result<String> {
         ));
     }
 
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(anyhow!(
+            "OpenAI transcription endpoint must not include embedded credentials"
+        ));
+    }
+
     match url.scheme() {
         "https" => Ok(base_url.to_string()),
         "http" if is_loopback_url(&url) => Ok(base_url.to_string()),
@@ -159,6 +176,48 @@ pub fn normalize_base_url(base_url: &str) -> Result<String> {
         _ => Err(anyhow!(
             "OpenAI transcription endpoint must use HTTPS, or HTTP for localhost"
         )),
+    }
+}
+
+async fn read_error_body_limited(response: reqwest::Response) -> String {
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    let mut truncated = false;
+
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else {
+            return "Failed to read error response".to_string();
+        };
+        let remaining = MAX_ERROR_BODY_BYTES.saturating_sub(body.len());
+        if chunk.len() > remaining {
+            body.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
+            break;
+        }
+        body.extend_from_slice(&chunk);
+        if body.len() == MAX_ERROR_BODY_BYTES {
+            truncated = true;
+            break;
+        }
+    }
+
+    let mut text = String::from_utf8_lossy(&body)
+        .chars()
+        .map(|character| {
+            if character.is_control() && !matches!(character, '\n' | '\r' | '\t') {
+                '\u{FFFD}'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if truncated {
+        text.push_str("… [truncated]");
+    }
+    if text.trim().is_empty() {
+        "OpenAI-compatible endpoint returned an empty error response".to_string()
+    } else {
+        text
     }
 }
 
@@ -226,6 +285,77 @@ pub fn normalize_language(language: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
+
+    fn mock_server(
+        status: &str,
+        body: String,
+        delay: Duration,
+    ) -> (String, mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let status = status.to_string();
+        let handle = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let header_end = loop {
+                let count = socket.read(&mut buffer).unwrap_or(0);
+                if count == 0 {
+                    return;
+                }
+                request.extend_from_slice(&buffer[..count]);
+                if let Some(position) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    break position + 4;
+                }
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                let count = socket.read(&mut buffer).unwrap_or(0);
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let _ = request_tx.send(request);
+            thread::sleep(delay);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes());
+        });
+        (format!("http://{address}/v1"), request_rx, handle)
+    }
+
+    fn mock_config(base_url: String) -> OpenAiTranscriptionConfig {
+        OpenAiTranscriptionConfig {
+            base_url,
+            api_key: "sk-test-only".to_string(),
+            model: "gpt-4o-transcribe".to_string(),
+            language: Some("de".to_string()),
+            prompt: Some("Names: Ada".to_string()),
+            translate_to_english: false,
+            include_logprobs: true,
+            chunking_enabled: true,
+        }
+    }
 
     #[test]
     fn normalizes_openai_language_codes() {
@@ -260,6 +390,7 @@ mod tests {
         assert!(normalize_base_url("http://example.com/v1").is_err());
         assert!(normalize_base_url("ftp://example.com/v1").is_err());
         assert!(normalize_base_url("https://example.com/v1?token=value").is_err());
+        assert!(normalize_base_url("https://user:secret@example.com/v1").is_err());
     }
 
     #[test]
@@ -284,5 +415,119 @@ mod tests {
         assert!(supports_chunking_strategy("gpt-4o-mini-transcribe"));
         assert!(supports_chunking_strategy("gpt-4o-transcribe-diarize"));
         assert!(!supports_chunking_strategy("whisper-1"));
+    }
+
+    #[test]
+    fn sends_completed_wav_as_non_streaming_multipart_request() {
+        let (base_url, requests, server) = mock_server(
+            "200 OK",
+            r#"{"text":"hello","logprobs":[{"logprob":-0.25}]}"#.to_string(),
+            Duration::ZERO,
+        );
+        let result = tauri::async_runtime::block_on(transcribe_samples(
+            &[0.0, 0.25, -0.25],
+            mock_config(base_url),
+        ))
+        .unwrap();
+        assert_eq!(result.text, "hello");
+
+        let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        server.join().unwrap();
+        let request_text = String::from_utf8_lossy(&request);
+        assert!(request_text.starts_with("POST /v1/audio/transcriptions HTTP/1.1"));
+        assert!(request_text
+            .to_ascii_lowercase()
+            .contains("authorization: bearer sk-test-only"));
+        assert!(request.windows(4).any(|part| part == b"RIFF"));
+        assert!(request_text.contains("name=\"model\""));
+        assert!(request_text.contains("gpt-4o-transcribe"));
+        assert!(request_text.contains("name=\"language\""));
+        assert!(request_text.contains("name=\"prompt\""));
+        assert!(request_text.contains("name=\"chunking_strategy\""));
+        assert!(request_text.contains("name=\"include[]\""));
+        assert!(!request_text.contains("name=\"stream\""));
+    }
+
+    #[test]
+    fn translation_uses_whisper_endpoint_without_transcription_only_fields() {
+        let (base_url, requests, server) =
+            mock_server("200 OK", r#"{"text":"hello"}"#.to_string(), Duration::ZERO);
+        let mut config = mock_config(base_url);
+        config.translate_to_english = true;
+        tauri::async_runtime::block_on(transcribe_samples(&[0.0], config)).unwrap();
+
+        let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        server.join().unwrap();
+        let request_text = String::from_utf8_lossy(&request);
+        assert!(request_text.starts_with("POST /v1/audio/translations HTTP/1.1"));
+        assert!(request_text.contains("whisper-1"));
+        assert!(!request_text.contains("name=\"language\""));
+        assert!(!request_text.contains("name=\"chunking_strategy\""));
+        assert!(!request_text.contains("name=\"include[]\""));
+    }
+
+    #[test]
+    fn error_body_is_bounded_and_redacts_the_api_key() {
+        let secret = "sk-test-only";
+        let body = format!(
+            "server echoed {secret} {}",
+            "x".repeat(MAX_ERROR_BODY_BYTES + 100)
+        );
+        let (base_url, _requests, server) = mock_server("401 Unauthorized", body, Duration::ZERO);
+        let error =
+            tauri::async_runtime::block_on(transcribe_samples(&[0.0], mock_config(base_url)))
+                .unwrap_err()
+                .to_string();
+        server.join().unwrap();
+        assert!(!error.contains(secret));
+        assert!(error.contains("[REDACTED]"));
+        assert!(error.contains("[truncated]"));
+    }
+
+    #[test]
+    fn malformed_success_response_is_rejected() {
+        let (base_url, _requests, server) =
+            mock_server("200 OK", "not-json".to_string(), Duration::ZERO);
+        let result =
+            tauri::async_runtime::block_on(transcribe_samples(&[0.0], mock_config(base_url)));
+        server.join().unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn delayed_response_respects_request_timeout() {
+        let (base_url, _requests, server) = mock_server(
+            "200 OK",
+            r#"{"text":"late"}"#.to_string(),
+            Duration::from_millis(200),
+        );
+        let error = tauri::async_runtime::block_on(transcribe_samples_with_timeouts(
+            &[0.0],
+            mock_config(base_url),
+            Duration::from_millis(40),
+            Duration::from_millis(40),
+        ))
+        .unwrap_err()
+        .to_string();
+        server.join().unwrap();
+        assert!(error.contains("timed out"));
+    }
+
+    #[test]
+    fn cancelling_request_drops_in_flight_mock_upload() {
+        let (base_url, requests, server) = mock_server(
+            "200 OK",
+            r#"{"text":"too late"}"#.to_string(),
+            Duration::from_millis(200),
+        );
+        let task =
+            tauri::async_runtime::spawn(transcribe_samples(&[0.0; 4096], mock_config(base_url)));
+
+        // Prove the completed-audio request reached the isolated mock before
+        // cancelling the task, rather than cancelling prior to any I/O.
+        requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        task.abort();
+        assert!(tauri::async_runtime::block_on(task).is_err());
+        server.join().unwrap();
     }
 }

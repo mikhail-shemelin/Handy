@@ -64,7 +64,7 @@ Handy is built as a Tauri application combining:
 - **Frontend**: React + TypeScript with Tailwind CSS for the settings UI
 - **Backend**: Rust for system integration, audio processing, and ML inference
 - **Core Libraries**:
-  - `whisper-rs`: Local speech recognition with Whisper models
+  - `transcribe-cpp`: Local speech recognition with Whisper-family models (GGML/GGUF)
   - `transcribe-rs`: CPU-optimized speech recognition with Parakeet models
   - `cpal`: Cross-platform audio I/O
   - `vad-rs`: Voice Activity Detection
@@ -85,30 +85,30 @@ Handy supports command-line flags for controlling a running instance and customi
 **Remote control flags** (sent to an already-running instance via the single-instance plugin):
 
 ```bash
-handy --toggle-transcription    # Toggle recording on/off
-handy --toggle-post-process     # Toggle recording with post-processing on/off
-handy --cancel                  # Cancel the current operation
+handy-hybrid --toggle-transcription    # Toggle recording on/off
+handy-hybrid --toggle-post-process     # Toggle recording with post-processing on/off
+handy-hybrid --cancel                  # Cancel the current operation
 ```
 
 **Startup flags:**
 
 ```bash
-handy --start-hidden            # Start without showing the main window
-handy --no-tray                 # Start without the system tray icon
-handy --debug                   # Enable debug mode with verbose logging
-handy --help                    # Show all available flags
+handy-hybrid --start-hidden            # Start without showing the main window
+handy-hybrid --no-tray                 # Start without the system tray icon
+handy-hybrid --debug                   # Enable debug mode with verbose logging
+handy-hybrid --help                    # Show all available flags
 ```
 
 Flags can be combined for autostart scenarios:
 
 ```bash
-handy --start-hidden --no-tray
+handy-hybrid --start-hidden --no-tray
 ```
 
-> **macOS tip:** When Handy is installed as an app bundle, invoke the binary directly:
+> **macOS tip:** When Handy Hybrid is installed as an app bundle, invoke the binary directly:
 >
 > ```bash
-> /Applications/Handy.app/Contents/MacOS/Handy --toggle-transcription
+> /Applications/Handy\ Hybrid.app/Contents/MacOS/handy-hybrid --toggle-transcription
 > ```
 
 ## Known Issues & Current Limitations
@@ -159,7 +159,7 @@ Without these tools, Handy falls back to enigo which may have limited compatibil
 
   - For building from source on Ubuntu/Debian, you may also need `libgtk-layer-shell-dev`.
 
-- The recording overlay is disabled by default on Linux (`Overlay Position: None`) because certain compositors treat it as the active window. When the overlay is visible it can steal focus, which prevents Handy from pasting back into the application that triggered transcription. If you enable the overlay anyway, be aware that clipboard-based pasting might fail or end up in the wrong window.
+- The recording overlay is disabled by default on Linux (`Overlay Style: None`) because certain compositors treat it as the active window. When the overlay is visible it can steal focus, which prevents Handy Hybrid from pasting back into the application that triggered transcription. If you enable the overlay anyway, be aware that clipboard-based pasting might fail or end up in the wrong window.
 - If you are having trouble with the app, running with the environment variable `WEBKIT_DISABLE_DMABUF_RENDERER=1` may help
 - If Handy fails to start reliably on Linux, see [Troubleshooting → Linux Startup Crashes or Instability](#linux-startup-crashes-or-instability).
 - **Global keyboard shortcuts (Wayland):** On Wayland, system-level shortcuts must be configured through your desktop environment or window manager. Use the [CLI flags](#cli-parameters) as the command for your custom shortcut.
@@ -168,7 +168,7 @@ Without these tools, Handy falls back to enigo which may have limited compatibil
   1. Open **Settings > Keyboard > Keyboard Shortcuts > Custom Shortcuts**
   2. Click the **+** button to add a new shortcut
   3. Set the **Name** to `Toggle Handy Transcription`
-  4. Set the **Command** to `handy --toggle-transcription`
+  4. Set the **Command** to `handy-hybrid --toggle-transcription`
   5. Click **Set Shortcut** and press your desired key combination (e.g., `Super+O`)
 
   **KDE Plasma:**
@@ -176,14 +176,14 @@ Without these tools, Handy falls back to enigo which may have limited compatibil
   2. Click **Edit > New > Global Shortcut > Command/URL**
   3. Name it `Toggle Handy Transcription`
   4. In the **Trigger** tab, set your desired key combination
-  5. In the **Action** tab, set the command to `handy --toggle-transcription`
+  5. In the **Action** tab, set the command to `handy-hybrid --toggle-transcription`
 
   **Sway / i3:**
 
   Add to your config file (`~/.config/sway/config` or `~/.config/i3/config`):
 
   ```ini
-  bindsym $mod+o exec handy --toggle-transcription
+  bindsym $mod+o exec handy-hybrid --toggle-transcription
   ```
 
   **Hyprland:**
@@ -191,24 +191,31 @@ Without these tools, Handy falls back to enigo which may have limited compatibil
   Add to your config file (`~/.config/hypr/hyprland.conf`):
 
   ```ini
-  bind = $mainMod, O, exec, handy --toggle-transcription
+  bind = $mainMod, O, exec, handy-hybrid --toggle-transcription
   ```
 
 - You can also manage global shortcuts outside of Handy via Unix signals, which lets Wayland window managers or other hotkey daemons keep ownership of keybindings:
 
-  | Signal    | Action                                    | Example                |
-  | --------- | ----------------------------------------- | ---------------------- |
-  | `SIGUSR2` | Toggle transcription                      | `pkill -USR2 -n handy` |
-  | `SIGUSR1` | Toggle transcription with post-processing | `pkill -USR1 -n handy` |
+  | Signal    | Action                                    | Example                       |
+  | --------- | ----------------------------------------- | ----------------------------- |
+  | `SIGUSR2` | Toggle transcription                      | `pkill -USR2 -n handy-hybrid` |
+  | `SIGUSR1` | Toggle transcription with post-processing | `pkill -USR1 -n handy-hybrid` |
 
   Example Sway config:
 
   ```ini
-  bindsym $mod+o exec pkill -USR2 -n handy
-  bindsym $mod+p exec pkill -USR1 -n handy
+  bindsym $mod+o exec pkill -USR2 -n handy-hybrid
+  bindsym $mod+p exec pkill -USR1 -n handy-hybrid
   ```
 
   `pkill` here simply delivers the signal—it does not terminate the process.
+
+**Overlay & Pasting Issues (Linux):**
+
+- The recording overlay window can interfere with pasting transcribed text into target applications on Linux (X11)
+- **Solution:** Open **Settings > Advanced** and set **"Overlay Style"** to **"None"** to disable the overlay
+- Enable **"Audio Feedback"** (also in Advanced) if you still want audible confirmation of recording state
+- Users who upgrade from older versions or import settings from other platforms may need to manually apply this change
 
 ### Platform Support
 
@@ -272,7 +279,7 @@ To verify a release manually, set `ARTIFACT` to the filename you downloaded, sav
 
 ```bash
 # Replace with the file you downloaded
-ARTIFACT="Handy_Hybrid_0.8.3_amd64.AppImage"
+ARTIFACT="Handy_Hybrid_0.9.4_amd64.AppImage"
 
 python3 - "$ARTIFACT" <<'PY'
 import base64, pathlib, sys
@@ -432,7 +439,7 @@ If it is already installed and you still see startup problems, try reinstalling 
 If installing the library does not help, you can skip `gtk-layer-shell` initialization entirely as a workaround. On some compositors (notably KDE Plasma under Wayland) it has been reported to interact poorly with the recording overlay. With this variable set, the overlay falls back to a regular always-on-top window:
 
 ```bash
-HANDY_NO_GTK_LAYER_SHELL=1 handy
+HANDY_NO_GTK_LAYER_SHELL=1 handy-hybrid
 ```
 
 **3. Disable WebKit DMA-BUF renderer (`WEBKIT_DISABLE_DMABUF_RENDERER`)**
@@ -440,7 +447,7 @@ HANDY_NO_GTK_LAYER_SHELL=1 handy
 On some GPU/driver combinations the WebKitGTK DMA-BUF renderer can cause the window to fail to render or to crash. Try:
 
 ```bash
-WEBKIT_DISABLE_DMABUF_RENDERER=1 handy
+WEBKIT_DISABLE_DMABUF_RENDERER=1 handy-hybrid
 ```
 
 **Making a workaround permanent**
@@ -448,7 +455,7 @@ WEBKIT_DISABLE_DMABUF_RENDERER=1 handy
 Once you've found a flag that helps, export it from your shell profile (`~/.bashrc`, `~/.zshenv`, …) or from the desktop autostart entry that launches Handy. If you launch Handy from a `.desktop` file, you can prefix the `Exec=` line, e.g.:
 
 ```ini
-Exec=env HANDY_NO_GTK_LAYER_SHELL=1 handy
+Exec=env HANDY_NO_GTK_LAYER_SHELL=1 handy-hybrid
 ```
 
 If a workaround helps you, please [open an issue](https://github.com/cjpais/Handy/issues) describing your distro, desktop environment, and session type — that information helps us narrow down the underlying bug.
@@ -490,10 +497,12 @@ The goal is to create both a useful tool and a foundation for others to build up
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
+Handy is open-source software, but the Handy name, logo, icon, and brand assets are not open-source. Unofficial forks, rewrites, and redistributions must use their own branding and must not imply endorsement or affiliation.
+
 ## Acknowledgments
 
 - **Whisper** by OpenAI for the speech recognition model
-- **whisper.cpp and ggml** for amazing cross-platform whisper inference/acceleration
+- **ggml and transcribe.cpp** for amazing cross-platform speech-to-text inference/acceleration
 - **Silero** for great lightweight VAD
 - **Tauri** team for the excellent Rust-based app framework
 - **Community contributors** helping make Handy better

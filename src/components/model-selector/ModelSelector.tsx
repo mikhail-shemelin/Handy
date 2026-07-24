@@ -179,17 +179,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
       return;
     }
 
-    if (isOpenAiActive) {
-      const result = await commands.changeTranscriptionProviderSetting(
-        "local" as TranscriptionProvider,
-      );
-      if (result.status === "error") {
-        setModelStatus("error");
-        setModelError(String(result.error));
-        onError?.(String(result.error));
-      }
-      await refreshSettings();
-    }
+    await refreshSettings();
   };
 
   const handleOpenAiSelect = async () => {

@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Handy Hybrid",
   "mainBinaryName": "handy-hybrid",
-  "version": "0.8.3",
+  "version": "0.9.4",
   "identifier": "com.mikhail-shemelin.handy-hybrid",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -46,16 +46,28 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libgtk-layer-shell0"]
+        "depends": ["libgtk-layer-shell0", "libopenblas0"],
+        "files": {
+          "/usr/lib/handy-hybrid": "transcribe-libs"
+        }
       },
       "rpm": {
+        "depends": [
+          "libgtk-layer-shell.so.0()(64bit)",
+          "libopenblas.so.0()(64bit)"
+        ],
         "compression": {
           "type": "none"
+        },
+        "files": {
+          "/usr/lib/handy-hybrid": "transcribe-libs"
         }
       },
       "appimage": {
         "bundleMediaFramework": true,
-        "files": {}
+        "files": {
+          "/usr/lib": "transcribe-libs"
+        }
       }
     },
     "windows": {

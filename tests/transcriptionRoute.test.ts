@@ -103,6 +103,10 @@ describe("transcription route helpers", () => {
       false,
     );
     assert.equal(
+      isValidOpenAiTranscriptionEndpoint("https://user:secret@example.com/v1"),
+      false,
+    );
+    assert.equal(
       getOpenAiTranscriptionAvailability(appSettings).missingReasonKey,
       "modelSelector.openaiMissingEndpoint",
     );

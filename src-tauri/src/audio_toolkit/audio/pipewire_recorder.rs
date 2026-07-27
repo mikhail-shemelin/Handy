@@ -5,8 +5,10 @@
 //! visualization, and buffering.
 
 use std::{
+    cell::RefCell,
     io::{Cursor, Error},
     mem,
+    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
@@ -15,15 +17,12 @@ use std::{
 };
 
 use pipewire as pw;
-use pw::{properties::properties, spa};
+use pw::prelude::*;
+use pw::spa;
 use spa::{
-    param::{
-        audio::{AudioFormat, AudioInfoRaw},
-        format::{MediaSubtype, MediaType},
-        format_utils, ParamType,
-    },
-    pod::{serialize::PodSerializer, Object, Pod, Value},
-    utils::{Direction, SpaTypes},
+    pod::{serialize::PodSerializer, Object, Property, PropertyFlags, Value},
+    utils::Id,
+    Direction,
 };
 
 use super::recorder::{
@@ -207,7 +206,8 @@ impl Drop for PipeWireRecorder {
 }
 
 struct CaptureState {
-    format: AudioInfoRaw,
+    sample_rate: u32,
+    channels: u32,
     sample_tx: mpsc::Sender<AudioChunk>,
     stop_flag: Arc<AtomicBool>,
     healthy: Arc<AtomicBool>,
@@ -224,7 +224,7 @@ impl CaptureState {
         }
         if let Some(tx) = self.init_tx.take() {
             self.healthy.store(true, Ordering::Release);
-            let _ = tx.send(Ok(self.format.rate()));
+            let _ = tx.send(Ok(self.sample_rate));
         }
     }
 
@@ -248,36 +248,41 @@ fn run_pipewire_loop(
     let setup = (|| -> Result<(), pw::Error> {
         pw::init();
 
-        let mainloop = pw::main_loop::MainLoopRc::new(None)?;
-        let context = pw::context::ContextRc::new(&mainloop, None)?;
-        let core = context.connect_rc(None)?;
-        let _quit_listener = quit_rx.attach(mainloop.loop_(), {
+        let mainloop = pw::MainLoop::new()?;
+        let _quit_listener = quit_rx.attach(&mainloop, {
             let mainloop = mainloop.clone();
             move |_| mainloop.quit()
         });
 
-        let props = properties! {
+        let props = pw::properties! {
             *pw::keys::MEDIA_TYPE => "Audio",
             *pw::keys::MEDIA_CATEGORY => "Capture",
             *pw::keys::MEDIA_ROLE => "Communication",
             *pw::keys::APP_NAME => APP_NAME,
             *pw::keys::NODE_NAME => NODE_NAME,
         };
-        let stream = pw::stream::StreamBox::new(&core, APP_NAME, props)?;
         let state_mainloop = mainloop.clone();
+        let capture_state = Rc::new(RefCell::new(CaptureState {
+            sample_rate: 0,
+            channels: 0,
+            sample_tx,
+            stop_flag,
+            healthy: Arc::clone(&healthy),
+            end_of_stream_sent: false,
+            stream_ready: false,
+            format_ready: false,
+            init_tx: Some(init_tx.clone()),
+        }));
 
-        let _stream_listener = stream
-            .add_local_listener_with_user_data(CaptureState {
-                format: AudioInfoRaw::default(),
-                sample_tx,
-                stop_flag,
-                healthy: Arc::clone(&healthy),
-                end_of_stream_sent: false,
-                stream_ready: false,
-                format_ready: false,
-                init_tx: Some(init_tx.clone()),
-            })
-            .state_changed(move |_stream, state, _old, new| match new {
+        let stream = pw::stream::Stream::with_user_data(
+            &mainloop,
+            APP_NAME,
+            props,
+            Rc::clone(&capture_state),
+        )
+        .state_changed(move |_old, new| {
+            let mut state = capture_state.borrow_mut();
+            match new {
                 pw::stream::StreamState::Streaming => {
                     state.stream_ready = true;
                     state.report_ready_if_possible();
@@ -301,103 +306,134 @@ fn run_pipewire_loop(
                     state_mainloop.quit();
                 }
                 pw::stream::StreamState::Connecting => {}
-            })
-            .param_changed(|_stream, state, id, param| {
-                let Some(param) = param else {
-                    return;
-                };
-                if id != ParamType::Format.as_raw() {
-                    return;
-                }
-                let Ok((media_type, media_subtype)) = format_utils::parse_format(param) else {
-                    state.report_error("PipeWire returned an invalid audio format".to_string());
-                    return;
-                };
-                if media_type != MediaType::Audio || media_subtype != MediaSubtype::Raw {
-                    state.report_error("PipeWire returned a non-raw audio format".to_string());
-                    return;
-                }
-                if state.format.parse(param).is_err() {
-                    state.report_error(
-                        "PipeWire returned an unreadable raw audio format".to_string(),
-                    );
-                    return;
-                }
-                if state.format.format() != AudioFormat::F32LE {
-                    state.report_error(format!(
-                        "PipeWire negotiated unsupported sample format {:?}",
-                        state.format.format()
-                    ));
-                    return;
-                }
-                if state.format.rate() == 0 || state.format.channels() == 0 {
-                    state.report_error(
-                        "PipeWire negotiated an invalid sample rate or channel count".to_string(),
-                    );
-                    return;
-                }
+            }
+        })
+        .param_changed(|id, state, param| {
+            if param.is_null() {
+                return;
+            }
+            if id != libspa_sys::SPA_PARAM_Format {
+                return;
+            }
 
-                log::info!(
-                    "PipeWire capture negotiated: rate={} Hz, channels={}",
-                    state.format.rate(),
-                    state.format.channels()
+            let mut state = state.borrow_mut();
+            let mut media_type = 0;
+            let mut media_subtype = 0;
+            let format_result =
+                unsafe { libspa_sys::spa_format_parse(param, &mut media_type, &mut media_subtype) };
+            if format_result < 0 {
+                state.report_error("PipeWire returned an invalid audio format".to_string());
+                return;
+            }
+            if media_type != libspa_sys::SPA_MEDIA_TYPE_audio
+                || media_subtype != libspa_sys::SPA_MEDIA_SUBTYPE_raw
+            {
+                state.report_error("PipeWire returned a non-raw audio format".to_string());
+                return;
+            }
+
+            let mut audio_info: libspa_sys::spa_audio_info_raw = unsafe { mem::zeroed() };
+            let audio_result =
+                unsafe { libspa_sys::spa_format_audio_raw_parse(param, &mut audio_info) };
+            if audio_result < 0 {
+                state.report_error("PipeWire returned an unreadable raw audio format".to_string());
+                return;
+            }
+            if audio_info.format != libspa_sys::SPA_AUDIO_FORMAT_F32_LE {
+                state.report_error(format!(
+                    "PipeWire negotiated unsupported sample format {}",
+                    audio_info.format
+                ));
+                return;
+            }
+            if audio_info.rate == 0 || audio_info.channels == 0 {
+                state.report_error(
+                    "PipeWire negotiated an invalid sample rate or channel count".to_string(),
                 );
-                state.format_ready = true;
-                state.report_ready_if_possible();
-            })
-            .process(|stream, state| {
-                let Some(mut buffer) = stream.dequeue_buffer() else {
-                    return;
-                };
-                let Some(data) = buffer.datas_mut().first_mut() else {
-                    return;
-                };
+                return;
+            }
 
-                if state.stop_flag.load(Ordering::Relaxed) {
-                    if !state.end_of_stream_sent {
-                        let _ = state.sample_tx.send(AudioChunk::EndOfStream);
-                        state.end_of_stream_sent = true;
-                    }
-                    return;
+            log::info!(
+                "PipeWire capture negotiated: rate={} Hz, channels={}",
+                audio_info.rate,
+                audio_info.channels
+            );
+            state.sample_rate = audio_info.rate;
+            state.channels = audio_info.channels;
+            state.format_ready = true;
+            state.report_ready_if_possible();
+        })
+        .process(|stream, state| {
+            let mut state = state.borrow_mut();
+            let Some(mut buffer) = stream.dequeue_buffer() else {
+                return;
+            };
+            let Some(data) = buffer.datas_mut().first_mut() else {
+                return;
+            };
+
+            if state.stop_flag.load(Ordering::Relaxed) {
+                if !state.end_of_stream_sent {
+                    let _ = state.sample_tx.send(AudioChunk::EndOfStream);
+                    state.end_of_stream_sent = true;
                 }
-                state.end_of_stream_sent = false;
+                return;
+            }
+            state.end_of_stream_sent = false;
 
-                let channels = state.format.channels() as usize;
-                if channels == 0 {
-                    return;
+            let channels = state.channels as usize;
+            if channels == 0 {
+                return;
+            }
+            let offset = data.chunk().offset() as usize;
+            let size = data.chunk().size() as usize;
+            let stride = data.chunk().stride();
+            let Some(raw) = data.data() else {
+                return;
+            };
+
+            match downmix_interleaved_f32le(raw, offset, size, stride, channels) {
+                Ok(samples) if !samples.is_empty() => {
+                    let _ = state.sample_tx.send(AudioChunk::Samples(samples));
                 }
-                let offset = data.chunk().offset() as usize;
-                let size = data.chunk().size() as usize;
-                let stride = data.chunk().stride();
-                let Some(raw) = data.data() else {
-                    return;
-                };
+                Ok(_) => {}
+                Err(error) => log::warn!("Skipping invalid PipeWire audio buffer: {error}"),
+            }
+        })
+        .create()?;
 
-                match downmix_interleaved_f32le(raw, offset, size, stride, channels) {
-                    Ok(samples) if !samples.is_empty() => {
-                        let _ = state.sample_tx.send(AudioChunk::Samples(samples));
-                    }
-                    Ok(_) => {}
-                    Err(error) => log::warn!("Skipping invalid PipeWire audio buffer: {error}"),
-                }
-            })
-            .register()?;
-
-        let mut audio_info = AudioInfoRaw::new();
-        audio_info.set_format(AudioFormat::F32LE);
-        audio_info.set_rate(PREFERRED_SAMPLE_RATE);
         let format_object = Object {
-            type_: SpaTypes::ObjectParamFormat.as_raw(),
-            id: ParamType::EnumFormat.as_raw(),
-            properties: audio_info.into(),
+            type_: libspa_sys::SPA_TYPE_OBJECT_Format,
+            id: libspa_sys::SPA_PARAM_EnumFormat,
+            properties: vec![
+                Property {
+                    key: libspa_sys::SPA_FORMAT_mediaType,
+                    flags: PropertyFlags::empty(),
+                    value: Value::Id(Id(libspa_sys::SPA_MEDIA_TYPE_audio)),
+                },
+                Property {
+                    key: libspa_sys::SPA_FORMAT_mediaSubtype,
+                    flags: PropertyFlags::empty(),
+                    value: Value::Id(Id(libspa_sys::SPA_MEDIA_SUBTYPE_raw)),
+                },
+                Property {
+                    key: libspa_sys::SPA_FORMAT_AUDIO_format,
+                    flags: PropertyFlags::empty(),
+                    value: Value::Id(Id(libspa_sys::SPA_AUDIO_FORMAT_F32_LE)),
+                },
+                Property {
+                    key: libspa_sys::SPA_FORMAT_AUDIO_rate,
+                    flags: PropertyFlags::empty(),
+                    value: Value::Int(PREFERRED_SAMPLE_RATE as i32),
+                },
+            ],
         };
         let values =
             PodSerializer::serialize(Cursor::new(Vec::new()), &Value::Object(format_object))
                 .map_err(|_| pw::Error::CreationFailed)?
                 .0
                 .into_inner();
-        let format_pod = Pod::from_bytes(&values).ok_or(pw::Error::CreationFailed)?;
-        let mut params = [format_pod];
+        let mut params = [values.as_ptr().cast::<libspa_sys::spa_pod>()];
 
         stream.connect(
             Direction::Input,

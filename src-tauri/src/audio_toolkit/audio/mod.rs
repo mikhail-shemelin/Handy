@@ -1,5 +1,7 @@
 // Re-export all audio components
 mod device;
+#[cfg(target_os = "linux")]
+mod pipewire_recorder;
 mod recorder;
 mod resampler;
 mod utils;

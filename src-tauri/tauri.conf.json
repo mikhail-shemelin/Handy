@@ -46,7 +46,11 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libgtk-layer-shell0", "libopenblas0"],
+        "depends": [
+          "libgtk-layer-shell0",
+          "libopenblas0",
+          "libpipewire-0.3-0 | libpipewire-0.3-0t64"
+        ],
         "files": {
           "/usr/lib/handy-hybrid": "transcribe-libs"
         }
@@ -54,7 +58,8 @@
       "rpm": {
         "depends": [
           "libgtk-layer-shell.so.0()(64bit)",
-          "libopenblas.so.0()(64bit)"
+          "libopenblas.so.0()(64bit)",
+          "libpipewire-0.3.so.0()(64bit)"
         ],
         "compression": {
           "type": "none"

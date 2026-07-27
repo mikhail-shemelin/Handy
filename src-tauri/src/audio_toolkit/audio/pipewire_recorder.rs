@@ -7,6 +7,7 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
+    ffi::c_int,
     io::{Cursor, Error},
     mem,
     rc::Rc,
@@ -35,6 +36,17 @@ const NODE_NAME: &str = "handy-hybrid-capture";
 const PREFERRED_SAMPLE_RATE: u32 = 48_000;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+// libspa-sys 0.6 declares this helper with a `format_` prefix, but its bundled
+// C shim exports `libspa_rs_audio_raw_parse`. Declare the symbol that is
+// actually present so release builds link correctly.
+unsafe extern "C" {
+    #[link_name = "libspa_rs_audio_raw_parse"]
+    fn spa_format_audio_raw_parse_compat(
+        format: *const libspa_sys::spa_pod,
+        info: *mut libspa_sys::spa_audio_info_raw,
+    ) -> c_int;
+}
 
 pub(crate) struct PipeWireRecorder {
     vad: Option<VadConfig>,
@@ -336,8 +348,7 @@ fn run_pipewire_loop(
             }
 
             let mut audio_info: libspa_sys::spa_audio_info_raw = unsafe { mem::zeroed() };
-            let audio_result =
-                unsafe { libspa_sys::spa_format_audio_raw_parse(param, &mut audio_info) };
+            let audio_result = unsafe { spa_format_audio_raw_parse_compat(param, &mut audio_info) };
             if audio_result < 0 {
                 state.report_error("PipeWire returned an unreadable raw audio format".to_string());
                 return;

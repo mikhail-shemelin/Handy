@@ -5,6 +5,7 @@
 //! visualization, and buffering.
 
 use std::{
+    borrow::Cow,
     cell::RefCell,
     io::{Cursor, Error},
     mem,
@@ -286,14 +287,16 @@ fn run_pipewire_loop(
                 pw::stream::StreamState::Streaming => {
                     state.stream_ready = true;
                     state.report_ready_if_possible();
+                    if state.format_ready && state.init_tx.is_none() {
+                        state.healthy.store(true, Ordering::Release);
+                    }
                 }
                 pw::stream::StreamState::Paused => {
                     if state.stream_ready {
-                        state.report_error(
-                            "PipeWire capture stream stopped producing audio".to_string(),
-                        );
-                        state_mainloop.quit();
+                        log::warn!("PipeWire capture paused; waiting for the source to reconnect");
                     }
+                    state.stream_ready = false;
+                    state.healthy.store(false, Ordering::Release);
                 }
                 pw::stream::StreamState::Error(error) => {
                     state.report_error(format!("PipeWire capture stream failed: {error}"));
@@ -391,8 +394,9 @@ fn run_pipewire_loop(
             let Some(raw) = data.data() else {
                 return;
             };
+            let raw = normalize_pipewire_chunk(raw, offset, size);
 
-            match downmix_interleaved_f32le(raw, offset, size, stride, channels) {
+            match downmix_interleaved_f32le(&raw, 0, raw.len(), stride, channels) {
                 Ok(samples) if !samples.is_empty() => {
                     let _ = state.sample_tx.send(AudioChunk::Samples(samples));
                 }
@@ -452,6 +456,24 @@ fn run_pipewire_loop(
     healthy.store(false, Ordering::Release);
 }
 
+fn normalize_pipewire_chunk(data: &[u8], offset: usize, size: usize) -> Cow<'_, [u8]> {
+    if data.is_empty() || size == 0 {
+        return Cow::Borrowed(&[]);
+    }
+
+    let offset = offset % data.len();
+    let size = size.min(data.len());
+    let contiguous = data.len() - offset;
+    if size <= contiguous {
+        return Cow::Borrowed(&data[offset..offset + size]);
+    }
+
+    let mut normalized = Vec::with_capacity(size);
+    normalized.extend_from_slice(&data[offset..]);
+    normalized.extend_from_slice(&data[..size - contiguous]);
+    Cow::Owned(normalized)
+}
+
 fn downmix_interleaved_f32le(
     data: &[u8],
     offset: usize,
@@ -498,13 +520,31 @@ fn downmix_interleaved_f32le(
 
 #[cfg(test)]
 mod tests {
-    use super::downmix_interleaved_f32le;
+    use super::{downmix_interleaved_f32le, normalize_pipewire_chunk};
 
     fn samples_to_bytes(samples: &[f32]) -> Vec<u8> {
         samples
             .iter()
             .flat_map(|sample| sample.to_le_bytes())
             .collect()
+    }
+
+    #[test]
+    fn normalizes_wrapped_pipewire_chunks() {
+        let bytes = samples_to_bytes(&[1.0, 2.0, 3.0, 4.0]);
+
+        let normalized = normalize_pipewire_chunk(&bytes, 12, 8);
+
+        assert_eq!(normalized.as_ref(), samples_to_bytes(&[4.0, 1.0]));
+    }
+
+    #[test]
+    fn normalizes_pipewire_offset_and_clamps_size() {
+        let bytes = samples_to_bytes(&[1.0, 2.0, 3.0, 4.0]);
+
+        let normalized = normalize_pipewire_chunk(&bytes, 20, usize::MAX);
+
+        assert_eq!(normalized.as_ref(), samples_to_bytes(&[2.0, 3.0, 4.0, 1.0]));
     }
 
     #[test]

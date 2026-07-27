@@ -9,7 +9,7 @@ on:
         type: string
         default: "main"
   push:
-    branches: [main]
+    branches: [main, ci/run-linux-pipewire-capture]
 
 jobs:
   build:

@@ -159,6 +159,10 @@ Without these tools, Handy falls back to enigo which may have limited compatibil
 
   - For building from source on Ubuntu/Debian, you may also need `libgtk-layer-shell-dev`.
 
+- **PipeWire capture dependency**:
+  - Linux builds use native PipeWire for the system-default microphone and require the PipeWire client library (`libpipewire-0.3-0` on Ubuntu 22.04/Debian, `libpipewire-0.3-0t64` on Ubuntu 24.04, `pipewire-libs` on Fedora/RHEL, or `pipewire` on Arch).
+  - Building from source on Ubuntu/Debian also requires `libpipewire-0.3-dev`.
+
 - The recording overlay is disabled by default on Linux (`Overlay Style: None`) because certain compositors treat it as the active window. When the overlay is visible it can steal focus, which prevents Handy Hybrid from pasting back into the application that triggered transcription. If you enable the overlay anyway, be aware that clipboard-based pasting might fail or end up in the wrong window.
 - If you are having trouble with the app, running with the environment variable `WEBKIT_DISABLE_DMABUF_RENDERER=1` may help
 - If Handy fails to start reliably on Linux, see [Troubleshooting → Linux Startup Crashes or Instability](#linux-startup-crashes-or-instability).

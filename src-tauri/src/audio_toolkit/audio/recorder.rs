@@ -19,7 +19,7 @@ use crate::audio_toolkit::{
     VoiceActivityDetector,
 };
 
-enum Cmd {
+pub(crate) enum Cmd {
     /// Begin capturing. Carries the send timestamp so the consumer can log how
     /// long the command sat in the channel (and how much audio was dropped
     /// before it was seen).
@@ -28,7 +28,7 @@ enum Cmd {
     Shutdown,
 }
 
-enum AudioChunk {
+pub(crate) enum AudioChunk {
     Samples(Vec<f32>),
     EndOfStream,
 }
@@ -49,7 +49,7 @@ pub enum VadPolicy {
 /// concurrently, so one detector is reconfigured per session (see `Cmd::Start`)
 /// rather than kept as two resident engines.
 #[derive(Clone)]
-struct VadConfig {
+pub(crate) struct VadConfig {
     detector: Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>,
     offline_hangover_frames: usize,
     streaming_hangover_frames: usize,
@@ -69,14 +69,17 @@ impl VadConfig {
 /// Callback invoked with each 16 kHz mono frame that passes the active capture
 /// policy while recording. Used to feed a live streaming transcription as audio arrives.
 pub type AudioFrameCallback = Arc<dyn Fn(&[f32]) + Send + Sync + 'static>;
+pub(crate) type LevelCallback = Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>;
 
 pub struct AudioRecorder {
     device: Option<Device>,
     cmd_tx: Option<mpsc::Sender<Cmd>>,
     worker_handle: Option<std::thread::JoinHandle<()>>,
     vad: Option<VadConfig>,
-    level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
+    level_cb: Option<LevelCallback>,
     audio_cb: Option<AudioFrameCallback>,
+    #[cfg(target_os = "linux")]
+    pipewire: Option<super::pipewire_recorder::PipeWireRecorder>,
     /// Preferred stream config cached per device name. The two HAL property
     /// queries in `get_preferred_config` cost ~40-85ms per open (worse on
     /// USB/Bluetooth), which lands on the keypress->capture path in on-demand
@@ -95,6 +98,8 @@ impl AudioRecorder {
             vad: None,
             level_cb: None,
             audio_cb: None,
+            #[cfg(target_os = "linux")]
+            pipewire: None,
             config_cache: Arc::new(Mutex::new(None)),
         })
     }
@@ -139,6 +144,47 @@ impl AudioRecorder {
     pub fn open(&mut self, device: Option<Device>) -> Result<(), Box<dyn std::error::Error>> {
         if self.worker_handle.is_some() {
             return Ok(()); // already open
+        }
+        #[cfg(target_os = "linux")]
+        if self.pipewire.is_some() {
+            return Ok(()); // already open
+        }
+
+        #[cfg(target_os = "linux")]
+        let use_pipewire = match device.as_ref() {
+            None => true,
+            Some(selected) => {
+                let selected_name = selected.name().ok();
+                let default_name = crate::audio_toolkit::get_cpal_host()
+                    .default_input_device()
+                    .and_then(|default| default.name().ok());
+                selected_name.is_some() && selected_name == default_name
+            }
+        };
+
+        #[cfg(target_os = "linux")]
+        if use_pipewire {
+            let mut recorder = super::pipewire_recorder::PipeWireRecorder::from_parts(
+                self.vad.clone(),
+                self.level_cb.clone(),
+                self.audio_cb.clone(),
+            );
+            match recorder.open() {
+                Ok(()) => {
+                    log::info!("Microphone capture using native PipeWire backend");
+                    self.pipewire = Some(recorder);
+                    return Ok(());
+                }
+                Err(error) => {
+                    log::warn!(
+                        "Native PipeWire capture unavailable ({error}); falling back to cpal/ALSA"
+                    );
+                }
+            }
+        } else {
+            log::info!(
+                "Using cpal/ALSA to preserve the explicitly selected non-default microphone"
+            );
         }
 
         let (sample_tx, sample_rx) = mpsc::channel::<AudioChunk>();
@@ -316,7 +362,25 @@ impl AudioRecorder {
         }
     }
 
-    pub fn start(&self, vad_policy: VadPolicy) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn start(&mut self, vad_policy: VadPolicy) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(target_os = "linux")]
+        if self.pipewire.is_some() {
+            if !self
+                .pipewire
+                .as_ref()
+                .is_some_and(|recorder| recorder.is_healthy())
+            {
+                log::warn!("PipeWire capture worker stopped; rebuilding microphone backend");
+                if let Some(mut recorder) = self.pipewire.take() {
+                    recorder.close()?;
+                }
+                self.open(None)?;
+            }
+            if let Some(recorder) = &self.pipewire {
+                return recorder.start(vad_policy);
+            }
+        }
+
         if let Some(tx) = &self.cmd_tx {
             tx.send(Cmd::Start(vad_policy, Instant::now()))?;
         }
@@ -324,6 +388,11 @@ impl AudioRecorder {
     }
 
     pub fn stop(&self) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+        #[cfg(target_os = "linux")]
+        if let Some(recorder) = &self.pipewire {
+            return recorder.stop();
+        }
+
         let (resp_tx, resp_rx) = mpsc::channel();
         if let Some(tx) = &self.cmd_tx {
             tx.send(Cmd::Stop(resp_tx))?;
@@ -332,6 +401,11 @@ impl AudioRecorder {
     }
 
     pub fn close(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(target_os = "linux")]
+        if let Some(mut recorder) = self.pipewire.take() {
+            return recorder.close();
+        }
+
         if let Some(tx) = self.cmd_tx.take() {
             let _ = tx.send(Cmd::Shutdown);
         }
@@ -471,6 +545,7 @@ pub fn is_no_input_device_error(error_message: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{is_microphone_access_denied, is_no_input_device_error};
 
@@ -514,7 +589,7 @@ mod tests {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_consumer(
+pub(crate) fn run_consumer(
     in_sample_rate: u32,
     vad: Option<VadConfig>,
     sample_rx: mpsc::Receiver<AudioChunk>,

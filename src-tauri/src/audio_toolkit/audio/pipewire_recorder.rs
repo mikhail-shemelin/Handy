@@ -531,7 +531,9 @@ fn downmix_interleaved_f32le(
 
 #[cfg(test)]
 mod tests {
-    use super::{downmix_interleaved_f32le, normalize_pipewire_chunk};
+    use std::fs;
+
+    use super::{downmix_interleaved_f32le, normalize_pipewire_chunk, PipeWireRecorder};
 
     fn samples_to_bytes(samples: &[f32]) -> Vec<u8> {
         samples
@@ -585,5 +587,34 @@ mod tests {
     fn rejects_out_of_bounds_buffers() {
         let bytes = samples_to_bytes(&[0.5]);
         assert!(downmix_interleaved_f32le(&bytes, 4, 4, 4, 1).is_err());
+    }
+
+    fn process_resource_count(path: &str) -> usize {
+        fs::read_dir(path).expect("read process resources").count()
+    }
+
+    fn pipewire_data_loop_count() -> usize {
+        fs::read_dir("/proc/self/task")
+            .expect("read process tasks")
+            .filter_map(Result::ok)
+            .filter_map(|task| fs::read_to_string(task.path().join("comm")).ok())
+            .filter(|name| name.trim() == "pw-data-loop")
+            .count()
+    }
+
+    #[test]
+    #[ignore = "requires a live PipeWire server"]
+    fn repeated_open_close_releases_pipewire_resources() {
+        let initial_fds = process_resource_count("/proc/self/fd");
+        let initial_data_loops = pipewire_data_loop_count();
+
+        for _ in 0..10 {
+            let mut recorder = PipeWireRecorder::from_parts(None, None, None);
+            recorder.open().expect("open PipeWire recorder");
+            recorder.close().expect("close PipeWire recorder");
+        }
+
+        assert_eq!(pipewire_data_loop_count(), initial_data_loops);
+        assert!(process_resource_count("/proc/self/fd") <= initial_fds + 2);
     }
 }

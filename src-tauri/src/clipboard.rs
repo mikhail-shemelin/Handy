@@ -322,6 +322,9 @@ fn type_text_via_wtype(text: &str) -> Result<(), String> {
 fn type_text_via_xdotool(text: &str) -> Result<(), String> {
     let output = Command::new("xdotool")
         .arg("type")
+        // xdotool otherwise waits 12 ms between every character. Long results
+        // then keep Handy in the transcribing state for several extra seconds.
+        .args(["--delay", "0"])
         .arg("--clearmodifiers")
         .arg("--")
         .arg(text)

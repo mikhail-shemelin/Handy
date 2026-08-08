@@ -212,11 +212,7 @@ impl Default for KeyboardImplementation {
 
 impl Default for PasteMethod {
     fn default() -> Self {
-        // Default to CtrlV for macOS and Windows, Direct for Linux
-        #[cfg(target_os = "linux")]
-        return PasteMethod::Direct;
-        #[cfg(not(target_os = "linux"))]
-        return PasteMethod::CtrlV;
+        PasteMethod::CtrlV
     }
 }
 
@@ -1488,6 +1484,7 @@ mod tests {
         let settings = get_default_settings();
         assert!(!settings.auto_submit);
         assert_eq!(settings.auto_submit_key, AutoSubmitKey::Enter);
+        assert_eq!(settings.paste_method, PasteMethod::CtrlV);
         assert_eq!(
             settings.settings_schema_version,
             CURRENT_SETTINGS_SCHEMA_VERSION

@@ -11,7 +11,7 @@ pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
 pub const OPENAI_TRANSCRIPTION_PROVIDER_ID: &str = "openai";
 pub const OPENAI_TRANSCRIPTION_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
-pub const OPENAI_TRANSCRIPTION_DEFAULT_MODEL: &str = "gpt-4o-transcribe";
+pub const OPENAI_TRANSCRIPTION_DEFAULT_MODEL: &str = "gpt-transcribe";
 const REDACTED_SECRET_PLACEHOLDER: &str = "[REDACTED]";
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
@@ -212,7 +212,11 @@ impl Default for KeyboardImplementation {
 
 impl Default for PasteMethod {
     fn default() -> Self {
-        PasteMethod::CtrlV
+        // Default to CtrlV for macOS and Windows, Direct for Linux
+        #[cfg(target_os = "linux")]
+        return PasteMethod::Direct;
+        #[cfg(not(target_os = "linux"))]
+        return PasteMethod::CtrlV;
     }
 }
 
@@ -1484,6 +1488,10 @@ mod tests {
         let settings = get_default_settings();
         assert!(!settings.auto_submit);
         assert_eq!(settings.auto_submit_key, AutoSubmitKey::Enter);
+        assert_eq!(settings.openai_transcription_model, "gpt-transcribe");
+        #[cfg(target_os = "linux")]
+        assert_eq!(settings.paste_method, PasteMethod::Direct);
+        #[cfg(not(target_os = "linux"))]
         assert_eq!(settings.paste_method, PasteMethod::CtrlV);
         assert_eq!(
             settings.settings_schema_version,

@@ -4,6 +4,10 @@ import { toast } from "sonner";
 import { commands } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
 import {
+  DEFAULT_OPENAI_TRANSCRIPTION_MODEL,
+  OPENAI_TRANSCRIPTION_MODELS,
+} from "@/lib/transcriptionRoute";
+import {
   SettingContainer,
   SettingsGroup,
   Textarea,
@@ -16,13 +20,12 @@ import type { ModelOption } from "./PostProcessingSettingsApi/types";
 
 const OPENAI_PROVIDER_ID = "openai";
 
-const OPENAI_MODELS: ModelOption[] = [
-  { value: "gpt-4o-transcribe", label: "gpt-4o-transcribe" },
-  { value: "gpt-4o-mini-transcribe", label: "gpt-4o-mini-transcribe" },
-  { value: "whisper-1", label: "whisper-1" },
-];
+const OPENAI_MODELS: ModelOption[] = OPENAI_TRANSCRIPTION_MODELS.map(
+  (value) => ({ value, label: value }),
+);
 
 const supportsOpenAiChunking = (model: string) =>
+  model === "gpt-transcribe" ||
   model === "gpt-4o-transcribe" ||
   model === "gpt-4o-mini-transcribe" ||
   model === "gpt-4o-transcribe-diarize";
@@ -41,7 +44,8 @@ export const TranscriptionProviderSettings: React.FC = () => {
   const apiKey =
     settings?.openai_transcription_api_keys?.[OPENAI_PROVIDER_ID] ?? "";
   const baseUrl = settings?.openai_transcription_base_url ?? "";
-  const model = settings?.openai_transcription_model ?? "gpt-4o-transcribe";
+  const model =
+    settings?.openai_transcription_model ?? DEFAULT_OPENAI_TRANSCRIPTION_MODEL;
   const prompt = settings?.openai_transcription_prompt ?? "";
   const chunkingEnabled =
     settings?.openai_transcription_chunking_enabled ?? false;

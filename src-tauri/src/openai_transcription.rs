@@ -11,6 +11,7 @@ const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
+const GPT_TRANSCRIBE_MODEL: &str = "gpt-transcribe";
 
 pub struct OpenAiTranscriptionConfig {
     pub base_url: String,
@@ -18,6 +19,7 @@ pub struct OpenAiTranscriptionConfig {
     pub model: String,
     pub language: Option<String>,
     pub prompt: Option<String>,
+    pub keywords: Vec<String>,
     pub translate_to_english: bool,
     pub include_logprobs: bool,
     pub chunking_enabled: bool,
@@ -63,6 +65,11 @@ async fn transcribe_samples_with_timeouts(
         return Err(anyhow!("OpenAI transcription model is required"));
     }
 
+    let uses_gpt_transcribe_context = !config.translate_to_english && model == GPT_TRANSCRIBE_MODEL;
+    if uses_gpt_transcribe_context {
+        validate_gpt_transcribe_keywords(&config.keywords)?;
+    }
+
     let wav_bytes = encode_wav_bytes(samples)?;
     if wav_bytes.len() > MAX_UPLOAD_BYTES {
         return Err(anyhow!(
@@ -102,7 +109,14 @@ async fn transcribe_samples_with_timeouts(
     }
 
     if !config.translate_to_english {
-        if let Some(language) = config.language.filter(|value| !value.trim().is_empty()) {
+        if uses_gpt_transcribe_context {
+            if let Some(language) = config.language.filter(|value| !value.trim().is_empty()) {
+                form = form.text("languages[]", language);
+            }
+            for keyword in config.keywords {
+                form = form.text("keywords[]", keyword);
+            }
+        } else if let Some(language) = config.language.filter(|value| !value.trim().is_empty()) {
             form = form.text("language", language);
         }
     }
@@ -236,8 +250,25 @@ fn supports_logprobs(model: &str) -> bool {
 fn supports_chunking_strategy(model: &str) -> bool {
     matches!(
         model,
-        "gpt-4o-transcribe" | "gpt-4o-mini-transcribe" | "gpt-4o-transcribe-diarize"
+        GPT_TRANSCRIBE_MODEL
+            | "gpt-4o-transcribe"
+            | "gpt-4o-mini-transcribe"
+            | "gpt-4o-transcribe-diarize"
     )
+}
+
+fn validate_gpt_transcribe_keywords(keywords: &[String]) -> Result<()> {
+    if let Some(keyword) = keywords.iter().find(|keyword| {
+        keyword
+            .chars()
+            .any(|character| matches!(character, '<' | '>' | '\r' | '\n'))
+    }) {
+        return Err(anyhow!(
+            "OpenAI transcription keyword {keyword:?} must stay on one line and must not contain '<' or '>'"
+        ));
+    }
+
+    Ok(())
 }
 
 fn is_loopback_url(url: &Url) -> bool {
@@ -285,7 +316,7 @@ pub fn normalize_language(language: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
+    use std::io::{ErrorKind, Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::thread;
@@ -351,10 +382,21 @@ mod tests {
             model: "gpt-4o-transcribe".to_string(),
             language: Some("de".to_string()),
             prompt: Some("Names: Ada".to_string()),
+            keywords: Vec::new(),
             translate_to_english: false,
             include_logprobs: true,
             chunking_enabled: true,
         }
+    }
+
+    fn multipart_values<'a>(request: &'a str, field_name: &str) -> Vec<&'a str> {
+        let marker = format!("name=\"{field_name}\"");
+        request
+            .split(&marker)
+            .skip(1)
+            .filter_map(|part| part.split_once("\r\n\r\n").map(|(_, value)| value))
+            .filter_map(|value| value.split("\r\n--").next())
+            .collect()
     }
 
     #[test]
@@ -401,6 +443,7 @@ mod tests {
             model: "gpt-4o-transcribe".to_string(),
             language: Some("de".to_string()),
             prompt: None,
+            keywords: Vec::new(),
             translate_to_english: true,
             include_logprobs: false,
             chunking_enabled: true,
@@ -411,10 +454,85 @@ mod tests {
 
     #[test]
     fn enables_auto_chunking_for_gpt_transcription_models_only() {
+        assert!(supports_chunking_strategy("gpt-transcribe"));
         assert!(supports_chunking_strategy("gpt-4o-transcribe"));
         assert!(supports_chunking_strategy("gpt-4o-mini-transcribe"));
         assert!(supports_chunking_strategy("gpt-4o-transcribe-diarize"));
         assert!(!supports_chunking_strategy("whisper-1"));
+    }
+
+    #[test]
+    fn sends_gpt_transcribe_context_in_model_specific_fields() {
+        let (base_url, requests, server) =
+            mock_server("200 OK", r#"{"text":"hello"}"#.to_string(), Duration::ZERO);
+        let mut config = mock_config(base_url);
+        config.model = GPT_TRANSCRIBE_MODEL.to_string();
+        config.language = Some("en".to_string());
+        config.prompt = Some("Transcribe literally.".to_string());
+        config.keywords = vec!["Handy Hybrid".to_string(), "Привет-мир".to_string()];
+
+        tauri::async_runtime::block_on(transcribe_samples(&[0.0], config)).unwrap();
+
+        let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        server.join().unwrap();
+        let request_text = String::from_utf8_lossy(&request);
+        assert_eq!(
+            multipart_values(&request_text, "model"),
+            vec![GPT_TRANSCRIBE_MODEL]
+        );
+        assert_eq!(
+            multipart_values(&request_text, "prompt"),
+            vec!["Transcribe literally."]
+        );
+        assert_eq!(
+            multipart_values(&request_text, "keywords[]"),
+            vec!["Handy Hybrid", "Привет-мир"]
+        );
+        assert_eq!(multipart_values(&request_text, "languages[]"), vec!["en"]);
+        assert!(multipart_values(&request_text, "language").is_empty());
+        assert_eq!(
+            multipart_values(&request_text, "chunking_strategy"),
+            vec!["auto"]
+        );
+        assert!(multipart_values(&request_text, "include[]").is_empty());
+    }
+
+    #[test]
+    fn omits_empty_gpt_transcribe_prompt_and_automatic_language() {
+        let (base_url, requests, server) =
+            mock_server("200 OK", r#"{"text":"hello"}"#.to_string(), Duration::ZERO);
+        let mut config = mock_config(base_url);
+        config.model = GPT_TRANSCRIBE_MODEL.to_string();
+        config.language = None;
+        config.prompt = Some("   ".to_string());
+
+        tauri::async_runtime::block_on(transcribe_samples(&[0.0], config)).unwrap();
+
+        let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        server.join().unwrap();
+        let request_text = String::from_utf8_lossy(&request);
+        assert!(multipart_values(&request_text, "prompt").is_empty());
+        assert!(multipart_values(&request_text, "language").is_empty());
+        assert!(multipart_values(&request_text, "languages[]").is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_gpt_transcribe_keywords_before_http_request() {
+        for keyword in ["bad<word", "bad>word", "bad\rword", "bad\nword"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let mut config = mock_config(format!("http://{}/v1", listener.local_addr().unwrap()));
+            config.model = GPT_TRANSCRIBE_MODEL.to_string();
+            config.keywords = vec![keyword.to_string()];
+
+            let error = tauri::async_runtime::block_on(transcribe_samples(&[0.0], config))
+                .unwrap_err()
+                .to_string();
+
+            assert!(error.contains(&format!("{keyword:?}")));
+            assert!(error.contains("must stay on one line"));
+            assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+        }
     }
 
     #[test]
@@ -424,11 +542,11 @@ mod tests {
             r#"{"text":"hello","logprobs":[{"logprob":-0.25}]}"#.to_string(),
             Duration::ZERO,
         );
-        let result = tauri::async_runtime::block_on(transcribe_samples(
-            &[0.0, 0.25, -0.25],
-            mock_config(base_url),
-        ))
-        .unwrap();
+        let mut config = mock_config(base_url);
+        config.prompt = Some("Transcribe literally.\n\nHandy Hybrid, Parakeet".to_string());
+        let result =
+            tauri::async_runtime::block_on(transcribe_samples(&[0.0, 0.25, -0.25], config))
+                .unwrap();
         assert_eq!(result.text, "hello");
 
         let request = requests.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -441,8 +559,11 @@ mod tests {
         assert!(request.windows(4).any(|part| part == b"RIFF"));
         assert!(request_text.contains("name=\"model\""));
         assert!(request_text.contains("gpt-4o-transcribe"));
-        assert!(request_text.contains("name=\"language\""));
-        assert!(request_text.contains("name=\"prompt\""));
+        assert_eq!(multipart_values(&request_text, "language"), vec!["de"]);
+        assert_eq!(
+            multipart_values(&request_text, "prompt"),
+            vec!["Transcribe literally.\n\nHandy Hybrid, Parakeet"]
+        );
         assert!(request_text.contains("name=\"chunking_strategy\""));
         assert!(request_text.contains("name=\"include[]\""));
         assert!(!request_text.contains("name=\"stream\""));

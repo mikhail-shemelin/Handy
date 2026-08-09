@@ -9,6 +9,7 @@ import {
   isOpenAiTranscriptionActive,
   isValidOpenAiTranscriptionEndpoint,
   OPENAI_TRANSCRIPTION_PROVIDER_ID,
+  OPENAI_TRANSCRIPTION_MODELS,
 } from "../src/lib/transcriptionRoute.ts";
 
 const settings = (overrides: Partial<AppSettings>): AppSettings =>
@@ -117,6 +118,9 @@ describe("transcription route helpers", () => {
   });
 
   test("uses the configured OpenAI model and falls back to the default label", () => {
+    assert.equal(DEFAULT_OPENAI_TRANSCRIPTION_MODEL, "gpt-transcribe");
+    assert.equal(OPENAI_TRANSCRIPTION_MODELS[0], "gpt-transcribe");
+    assert.ok(OPENAI_TRANSCRIPTION_MODELS.includes("gpt-transcribe"));
     assert.equal(
       getOpenAiTranscriptionModel(
         settings({ openai_transcription_model: "whisper-1" }),
@@ -125,7 +129,7 @@ describe("transcription route helpers", () => {
     );
     assert.equal(
       getOpenAiTranscriptionModel(settings({ openai_transcription_model: "" })),
-      DEFAULT_OPENAI_TRANSCRIPTION_MODEL,
+      "gpt-transcribe",
     );
   });
 

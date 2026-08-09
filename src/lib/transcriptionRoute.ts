@@ -2,7 +2,13 @@ import type { AppSettings } from "@/bindings";
 
 export const OPENAI_TRANSCRIPTION_ROUTE_ID = "__openai_transcription__";
 export const OPENAI_TRANSCRIPTION_PROVIDER_ID = "openai";
-export const DEFAULT_OPENAI_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
+export const DEFAULT_OPENAI_TRANSCRIPTION_MODEL = "gpt-transcribe";
+export const OPENAI_TRANSCRIPTION_MODELS = [
+  "gpt-transcribe",
+  "gpt-4o-transcribe",
+  "gpt-4o-mini-transcribe",
+  "whisper-1",
+] as const;
 
 const REDACTED_SECRET_PLACEHOLDER = "[REDACTED]";
 

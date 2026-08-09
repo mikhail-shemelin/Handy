@@ -1479,7 +1479,9 @@ impl TranscriptionManager {
         let model = settings.openai_transcription_model.clone();
         let language = openai_transcription::normalize_language(&settings.selected_language);
         let translate_to_english = settings.translate_to_english;
-        let prompt = build_openai_transcription_prompt(
+        let context = build_openai_transcription_context(
+            &model,
+            translate_to_english,
             &settings.openai_transcription_prompt,
             &settings.custom_words,
         );
@@ -1488,13 +1490,12 @@ impl TranscriptionManager {
             api_key: settings.openai_transcription_api_key(),
             model: model.clone(),
             language: language.clone(),
-            prompt,
+            prompt: context.prompt,
+            keywords: context.keywords,
             translate_to_english,
             include_logprobs: cfg!(debug_assertions),
             chunking_enabled: settings.openai_transcription_chunking_enabled,
         };
-        let audio_peak = peak_amplitude(&audio);
-
         let started = Instant::now();
         let transcription = openai_transcription::transcribe_samples(&audio, config)
             .await
@@ -1512,19 +1513,7 @@ impl TranscriptionManager {
             log_openai_logprob_summary(logprobs);
         }
 
-        let prompt_echo = should_discard_custom_words_prompt_echo(
-            &transcription.text,
-            &settings.custom_words,
-            audio_peak,
-        );
-        let filtered = if prompt_echo {
-            info!(
-                "Discarding near-silent OpenAI transcription that only repeats the custom-word prompt (peak={audio_peak:.6})"
-            );
-            String::new()
-        } else {
-            post_process_transcription_text(transcription.text, &settings, true)
-        };
+        let filtered = post_process_transcription_text(transcription.text, &settings, true);
         info!(
             "OpenAI transcription completed in {}ms (model={}, language={}, translate={})",
             started.elapsed().as_millis(),
@@ -1570,48 +1559,34 @@ fn build_openai_transcription_prompt(
     (!prompt_parts.is_empty()).then(|| prompt_parts.join("\n\n"))
 }
 
-fn normalize_prompt_echo_candidate(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
+struct OpenAiTranscriptionContext {
+    prompt: Option<String>,
+    keywords: Vec<String>,
 }
 
-fn is_custom_words_prompt_echo(transcription: &str, custom_words: &[String]) -> bool {
-    if custom_words.is_empty() {
-        return false;
+fn build_openai_transcription_context(
+    model: &str,
+    translate_to_english: bool,
+    custom_prompt: &str,
+    custom_words: &[String],
+) -> OpenAiTranscriptionContext {
+    if model.trim() == "gpt-transcribe" && !translate_to_english {
+        let custom_prompt = custom_prompt.trim();
+        return OpenAiTranscriptionContext {
+            prompt: (!custom_prompt.is_empty()).then(|| custom_prompt.to_string()),
+            keywords: custom_words.to_vec(),
+        };
     }
 
-    let normalized_transcription = normalize_prompt_echo_candidate(transcription);
-    !normalized_transcription.is_empty()
-        && normalized_transcription == normalize_prompt_echo_candidate(&custom_words.join(", "))
-}
-
-const PROMPT_ECHO_MAX_AUDIO_PEAK: f32 = 0.001;
-
-fn peak_amplitude(samples: &[f32]) -> f32 {
-    samples
-        .iter()
-        .map(|sample| sample.abs())
-        .fold(0.0, f32::max)
-}
-
-fn should_discard_custom_words_prompt_echo(
-    transcription: &str,
-    custom_words: &[String],
-    audio_peak: f32,
-) -> bool {
-    audio_peak <= PROMPT_ECHO_MAX_AUDIO_PEAK
-        && is_custom_words_prompt_echo(transcription, custom_words)
+    OpenAiTranscriptionContext {
+        prompt: build_openai_transcription_prompt(custom_prompt, custom_words),
+        keywords: Vec::new(),
+    }
 }
 
 #[cfg(test)]
 mod openai_prompt_tests {
-    use super::{
-        build_openai_transcription_prompt, is_custom_words_prompt_echo, peak_amplitude,
-        should_discard_custom_words_prompt_echo,
-    };
+    use super::{build_openai_transcription_context, build_openai_transcription_prompt};
 
     #[test]
     fn combines_openai_prompt_with_custom_words() {
@@ -1626,64 +1601,48 @@ mod openai_prompt_tests {
     }
 
     #[test]
-    fn detects_custom_word_prompt_echo_with_punctuation_changes() {
-        let custom_words = vec![
-            "AGENTS.md".to_string(),
-            "CLAUDE.md".to_string(),
-            "WEBP".to_string(),
-        ];
+    fn separates_gpt_transcribe_prompt_and_keywords() {
+        let context = build_openai_transcription_context(
+            "gpt-transcribe",
+            false,
+            " Transcribe literally. ",
+            &["Handy Hybrid".to_string(), "Привет-мир".to_string()],
+        );
 
-        assert!(is_custom_words_prompt_echo(
-            "AGENTS.md, CLAUDE.md, WEBP.",
-            &custom_words
-        ));
+        assert_eq!(context.prompt.as_deref(), Some("Transcribe literally."));
+        assert_eq!(context.keywords, ["Handy Hybrid", "Привет-мир"]);
     }
 
     #[test]
-    fn keeps_real_transcription_that_mentions_custom_words() {
-        let custom_words = vec!["Akeneo".to_string(), "Aprimo".to_string()];
+    fn preserves_legacy_prompt_format_for_other_models() {
+        let context = build_openai_transcription_context(
+            "gpt-4o-transcribe",
+            false,
+            "Transcribe literally.",
+            &["Handy Hybrid".to_string(), "Parakeet".to_string()],
+        );
 
-        assert!(!is_custom_words_prompt_echo(
-            "Compare Akeneo with Aprimo for this project.",
-            &custom_words
-        ));
+        assert_eq!(
+            context.prompt.as_deref(),
+            Some("Transcribe literally.\n\nHandy Hybrid, Parakeet")
+        );
+        assert!(context.keywords.is_empty());
     }
 
     #[test]
-    fn does_not_treat_empty_custom_words_as_an_echo() {
-        assert!(!is_custom_words_prompt_echo("", &[]));
-    }
+    fn preserves_legacy_prompt_format_for_translation() {
+        let context = build_openai_transcription_context(
+            "gpt-transcribe",
+            true,
+            "Transcribe literally.",
+            &["Handy Hybrid".to_string()],
+        );
 
-    #[test]
-    fn discards_prompt_echo_only_when_audio_is_near_silent() {
-        let custom_words = vec!["AGENTS.md".to_string(), "CLAUDE.md".to_string()];
-        let transcription = "AGENTS.md, CLAUDE.md";
-
-        assert!(should_discard_custom_words_prompt_echo(
-            transcription,
-            &custom_words,
-            0.000_3,
-        ));
-        assert!(!should_discard_custom_words_prompt_echo(
-            transcription,
-            &custom_words,
-            0.01,
-        ));
-    }
-
-    #[test]
-    fn keeps_spoken_custom_word_when_normalization_removes_punctuation() {
-        assert!(!should_discard_custom_words_prompt_echo(
-            "C",
-            &["C++".to_string()],
-            0.1,
-        ));
-    }
-
-    #[test]
-    fn calculates_audio_peak() {
-        assert_eq!(peak_amplitude(&[-0.25, 0.1, 0.2]), 0.25);
-        assert_eq!(peak_amplitude(&[]), 0.0);
+        assert_eq!(
+            context.prompt.as_deref(),
+            Some("Transcribe literally.\n\nHandy Hybrid")
+        );
+        assert!(context.keywords.is_empty());
     }
 }
 

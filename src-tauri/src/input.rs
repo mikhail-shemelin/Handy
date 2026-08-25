@@ -86,32 +86,6 @@ pub fn send_paste_ctrl_shift_v(enigo: &mut Enigo) -> Result<(), String> {
     Ok(())
 }
 
-/// Sends a Shift+Insert paste command (Windows and Linux only).
-/// This is more universal for terminal applications and legacy software.
-/// Note: On Wayland, this may not work - callers should check for Wayland and use alternative methods.
-pub fn send_paste_shift_insert(enigo: &mut Enigo) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let insert_key_code = Key::Other(0x2D); // VK_INSERT
-    #[cfg(not(target_os = "windows"))]
-    let insert_key_code = Key::Other(0x76); // XK_Insert (keycode 118 / 0x76, also used as fallback)
-
-    // Press Shift + Insert
-    enigo
-        .key(Key::Shift, enigo::Direction::Press)
-        .map_err(|e| format!("Failed to press Shift key: {}", e))?;
-    enigo
-        .key(insert_key_code, enigo::Direction::Click)
-        .map_err(|e| format!("Failed to click Insert key: {}", e))?;
-
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    enigo
-        .key(Key::Shift, enigo::Direction::Release)
-        .map_err(|e| format!("Failed to release Shift key: {}", e))?;
-
-    Ok(())
-}
-
 /// Pastes text directly using the enigo text method.
 /// This tries to use system input methods if possible, otherwise simulates keystrokes one by one.
 pub fn paste_text_direct(enigo: &mut Enigo, text: &str) -> Result<(), String> {

@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Pano ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Pano (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Pano (Shift+Insert)",
           "direct": "Doğrudan",
           "none": "Yok",
           "externalScript": "Harici Betik"

@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Klembord ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Klembord (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Klembord (Shift+Insert)",
           "direct": "Direct",
           "none": "Geen",
           "externalScript": "Extern script"

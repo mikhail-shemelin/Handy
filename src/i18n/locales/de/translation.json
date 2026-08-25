@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Zwischenablage ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Zwischenablage (Strg+Umschalt+V)",
-          "clipboardShiftInsert": "Zwischenablage (Umschalt+Einfg)",
           "direct": "Direkt",
           "none": "Keine",
           "externalScript": "Externes Skript"

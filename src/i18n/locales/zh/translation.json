@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "剪贴板 ({{modifier}}+V)",
           "clipboardCtrlShiftV": "剪贴板 (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "剪贴板 (Shift+Insert)",
           "direct": "直接",
           "none": "无",
           "externalScript": "外部脚本"

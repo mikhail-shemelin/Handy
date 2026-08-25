@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Área de Transferência ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Área de Transferência (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Área de Transferência (Shift+Insert)",
           "direct": "Direto",
           "none": "Nenhum",
           "externalScript": "Script externo"

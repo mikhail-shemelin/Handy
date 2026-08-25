@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Schowek ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Schowek (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Schowek (Shift+Insert)",
           "direct": "Bezpośrednio",
           "none": "Brak",
           "externalScript": "Skrypt zewnętrzny"

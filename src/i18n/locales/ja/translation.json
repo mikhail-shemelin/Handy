@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "クリップボード ({{modifier}}+V)",
           "clipboardCtrlShiftV": "クリップボード (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "クリップボード (Shift+Insert)",
           "direct": "直接",
           "none": "なし",
           "externalScript": "外部スクリプト"

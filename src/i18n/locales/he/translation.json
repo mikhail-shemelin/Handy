@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "לוח ({{modifier}}+V)",
           "clipboardCtrlShiftV": "לוח (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "לוח (Shift+Insert)",
           "direct": "ישיר",
           "none": "ללא",
           "externalScript": "סקריפט חיצוני"

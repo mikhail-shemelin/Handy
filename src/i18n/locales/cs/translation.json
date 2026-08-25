@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Schránka ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Schránka (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Schránka (Shift+Insert)",
           "direct": "Přímé",
           "none": "Žádné",
           "externalScript": "Externí skript"

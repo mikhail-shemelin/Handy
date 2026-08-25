@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Клипборд ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Клипборд (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Клипборд (Shift+Insert)",
           "direct": "Директно",
           "none": "Няма",
           "externalScript": "Външен скрипт"

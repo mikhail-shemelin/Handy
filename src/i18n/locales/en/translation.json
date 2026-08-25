@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Clipboard ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Clipboard (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Clipboard (Shift+Insert)",
           "direct": "Direct",
           "none": "None",
           "externalScript": "External Script"

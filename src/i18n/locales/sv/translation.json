@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Urklipp ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Urklipp (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Urklipp (Shift+Insert)",
           "direct": "Direkt",
           "none": "Ingen",
           "externalScript": "Externt skript"

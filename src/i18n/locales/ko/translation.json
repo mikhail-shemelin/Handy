@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "클립보드 ({{modifier}}+V)",
           "clipboardCtrlShiftV": "클립보드 (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "클립보드 (Shift+Insert)",
           "direct": "직접",
           "none": "없음",
           "externalScript": "외부 스크립트"

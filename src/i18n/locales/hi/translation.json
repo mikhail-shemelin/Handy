@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "क्लिपबोर्ड ({{modifier}}+V)",
           "clipboardCtrlShiftV": "क्लिपबोर्ड (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "क्लिपबोर्ड (Shift+Insert)",
           "direct": "डायरेक्ट",
           "none": "कोई नहीं",
           "externalScript": "बाहरी स्क्रिप्ट"

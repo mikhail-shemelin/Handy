@@ -162,7 +162,6 @@ pub enum PasteMethod {
     CtrlV,
     Direct,
     None,
-    ShiftInsert,
     CtrlShiftV,
     ExternalScript,
 }

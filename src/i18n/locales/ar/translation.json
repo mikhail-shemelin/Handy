@@ -290,7 +290,6 @@
         "options": {
           "clipboard": "الحافظة ({{modifier}}+V)",
           "clipboardCtrlShiftV": "الحافظة (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "الحافظة (Shift+Insert)",
           "direct": "مباشر",
           "none": "بلا",
           "externalScript": "نص برمجي خارجي"

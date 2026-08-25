@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Portapapeles ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Portapapeles (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Portapapeles (Shift+Insert)",
           "direct": "Directo",
           "none": "Ninguno",
           "externalScript": "Script externo"

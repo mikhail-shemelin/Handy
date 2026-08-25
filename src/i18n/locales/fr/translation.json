@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Presse-papiers ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Presse-papiers (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Presse-papiers (Shift+Insert)",
           "direct": "Direct",
           "none": "Aucun",
           "externalScript": "Script externe"

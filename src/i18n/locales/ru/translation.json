@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Буфер обмена ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Буфер обмена (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Буфер обмена (Shift+Insert)",
           "direct": "Прямой",
           "none": "Нет",
           "externalScript": "Внешний скрипт"

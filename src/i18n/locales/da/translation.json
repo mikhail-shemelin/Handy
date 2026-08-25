@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Udklipsholder ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Udklipsholder (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Udklipsholder (Shift+Insert)",
           "direct": "Direkte",
           "none": "Ingen",
           "externalScript": "Eksternt script"

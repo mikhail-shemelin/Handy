@@ -311,7 +311,6 @@
         "options": {
           "clipboard": "Appunti ({{modifier}}+V)",
           "clipboardCtrlShiftV": "Appunti (Ctrl+Shift+V)",
-          "clipboardShiftInsert": "Appunti (Shift+Insert)",
           "direct": "Diretto",
           "none": "Nessuno",
           "externalScript": "Script esterno"

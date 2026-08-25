@@ -65,7 +65,6 @@ fn paste_via_clipboard(
         match paste_method {
             PasteMethod::CtrlV => input::send_paste_ctrl_v(enigo)?,
             PasteMethod::CtrlShiftV => input::send_paste_ctrl_shift_v(enigo)?,
-            PasteMethod::ShiftInsert => input::send_paste_shift_insert(enigo)?,
             _ => return Err("Invalid paste method for clipboard paste".into()),
         }
     }
@@ -445,7 +444,6 @@ fn send_key_combo_via_wtype(paste_method: &PasteMethod) -> Result<(), String> {
 fn wtype_paste_args(paste_method: &PasteMethod) -> Result<Vec<&'static str>, String> {
     match paste_method {
         PasteMethod::CtrlV => Ok(vec!["-M", "ctrl", "-k", "v"]),
-        PasteMethod::ShiftInsert => Ok(vec!["-M", "shift", "-k", "Insert"]),
         PasteMethod::CtrlShiftV => Ok(vec!["-M", "ctrl", "-M", "shift", "-k", "v"]),
         _ => Err("Unsupported paste method".into()),
     }
@@ -474,7 +472,6 @@ fn send_key_combo_via_dotool(paste_method: &PasteMethod) -> Result<(), String> {
 fn dotool_paste_command(paste_method: &PasteMethod) -> Result<&'static str, String> {
     match paste_method {
         PasteMethod::CtrlV => Ok("echo key ctrl+v | dotool"),
-        PasteMethod::ShiftInsert => Ok("echo key shift+insert | dotool"),
         PasteMethod::CtrlShiftV => Ok("echo key ctrl+shift+v | dotool"),
         _ => Err("Unsupported paste method".into()),
     }
@@ -484,7 +481,7 @@ fn dotool_paste_command(paste_method: &PasteMethod) -> Result<&'static str, Stri
 #[cfg(target_os = "linux")]
 fn send_key_combo_via_ydotool(paste_method: &PasteMethod) -> Result<(), String> {
     // ydotool uses Linux input event keycodes with format <keycode>:<pressed>
-    // where pressed is 1 for down, 0 for up. Keycodes: ctrl=29, shift=42, v=47, insert=110
+    // where pressed is 1 for down, 0 for up. Keycodes: ctrl=29, shift=42, v=47
     let args = ydotool_paste_args(paste_method)?;
 
     let output = Command::new("ydotool")
@@ -504,7 +501,6 @@ fn send_key_combo_via_ydotool(paste_method: &PasteMethod) -> Result<(), String> 
 fn ydotool_paste_args(paste_method: &PasteMethod) -> Result<Vec<&'static str>, String> {
     match paste_method {
         PasteMethod::CtrlV => Ok(vec!["key", "29:1", "47:1", "47:0", "29:0"]),
-        PasteMethod::ShiftInsert => Ok(vec!["key", "42:1", "110:1", "110:0", "42:0"]),
         PasteMethod::CtrlShiftV => Ok(vec!["key", "29:1", "42:1", "47:1", "47:0", "42:0", "29:0"]),
         _ => Err("Unsupported paste method".into()),
     }
@@ -535,7 +531,6 @@ fn xdotool_paste_key_combo(paste_method: &PasteMethod) -> Result<&'static str, S
     match paste_method {
         PasteMethod::CtrlV => Ok("ctrl+v"),
         PasteMethod::CtrlShiftV => Ok("ctrl+shift+v"),
-        PasteMethod::ShiftInsert => Ok("shift+Insert"),
         _ => Err("Unsupported paste method".into()),
     }
 }
@@ -669,16 +664,14 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
                 settings.typing_tool,
             )?;
         }
-        PasteMethod::CtrlV | PasteMethod::CtrlShiftV | PasteMethod::ShiftInsert => {
-            paste_via_clipboard(
-                &mut enigo,
-                &text,
-                &app_handle,
-                &paste_method,
-                paste_delay_ms,
-                paste_delay_after_ms,
-            )?
-        }
+        PasteMethod::CtrlV | PasteMethod::CtrlShiftV => paste_via_clipboard(
+            &mut enigo,
+            &text,
+            &app_handle,
+            &paste_method,
+            paste_delay_ms,
+            paste_delay_after_ms,
+        )?,
         PasteMethod::ExternalScript => {
             let script_path = settings
                 .external_script_path
@@ -725,7 +718,6 @@ mod tests {
         assert!(should_send_auto_submit(true, PasteMethod::CtrlV));
         assert!(should_send_auto_submit(true, PasteMethod::Direct));
         assert!(should_send_auto_submit(true, PasteMethod::CtrlShiftV));
-        assert!(should_send_auto_submit(true, PasteMethod::ShiftInsert));
     }
 
     #[cfg(target_os = "linux")]
@@ -734,26 +726,5 @@ mod tests {
         let args = xdotool_type_args("Привет");
         assert_eq!(args, ["type", "--clearmodifiers", "--", "Привет"]);
         assert!(!args.contains(&"--delay"));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn shift_insert_has_mappings_for_all_linux_input_tools() {
-        assert_eq!(
-            wtype_paste_args(&PasteMethod::ShiftInsert).unwrap(),
-            ["-M", "shift", "-k", "Insert"]
-        );
-        assert_eq!(
-            dotool_paste_command(&PasteMethod::ShiftInsert).unwrap(),
-            "echo key shift+insert | dotool"
-        );
-        assert_eq!(
-            ydotool_paste_args(&PasteMethod::ShiftInsert).unwrap(),
-            ["key", "42:1", "110:1", "110:0", "42:0"]
-        );
-        assert_eq!(
-            xdotool_paste_key_combo(&PasteMethod::ShiftInsert).unwrap(),
-            "shift+Insert"
-        );
     }
 }
